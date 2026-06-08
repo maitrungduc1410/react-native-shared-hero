@@ -1,7 +1,7 @@
 
 # react-native-shared-hero
 
-High-performance, fully-native shared-element ("hero") transitions for React Native. Every flight runs in **Swift and Kotlin** on the **New Architecture (Fabric)** — no JS-thread animation — and the library is **router-agnostic**: it matches a source and destination by id across mount/unmount and flies a snapshot in a window-level overlay, with no dependency on any navigation library.
+High-performance, fully-native shared-element ("hero") transitions for React Native. Every flight runs in **Swift and Kotlin** on the **New Architecture (Fabric)** — no JS-thread animation — and the library is **router-agnostic**: it matches a source and destination by id across mount/unmount and flies a snapshot in a window-level overlay, with no dependency on any navigation library. Works in bare React Native and **Expo** apps (via a [development build](#use-with-expo)).
 
 > How it works under the hood — see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
@@ -10,6 +10,36 @@ High-performance, fully-native shared-element ("hero") transitions for React Nat
 | Android | iOS |
 | --- | --- |
 | <video src="https://github.com/user-attachments/assets/35170436-3921-43ad-ac1c-face5a00c7ec" controls loop muted></video> | <video src="https://github.com/user-attachments/assets/3aee83c7-190e-41fa-87b2-9a8ada59a481" controls loop muted></video> |
+
+## Table of contents
+
+- [Features](#features)
+- [Why this library?](#why-this-library)
+- [Requirements](#requirements)
+- [Installation](#installation)
+  - [Use with Expo](#use-with-expo)
+- [Quick start](#quick-start)
+- [API reference](#api-reference)
+  - [`useSharedHero`](#usesharedhero)
+- [Use cases](#use-cases)
+  - [Basic image hero](#basic-image-hero)
+  - [FlatList (virtualized)](#flatlist-virtualized)
+  - [Card morph (Material container)](#card-morph-material-container)
+  - [Native modal hero](#native-modal-hero)
+  - [Transparent modal hero](#transparent-modal-hero)
+  - [Tabs → detail hero](#tabs--detail-hero)
+  - [FormSheet hero](#formsheet-hero)
+  - [In-place toggle](#in-place-toggle)
+  - [Spring vs duration](#spring-vs-duration)
+  - [Arc path motion](#arc-path-motion)
+  - [Custom shuttle](#custom-shuttle)
+  - [Drag-to-dismiss (gesture return)](#drag-to-dismiss-gesture-return)
+  - [Multi-step navigation](#multi-step-navigation)
+  - [Core Modal (React Native)](#core-modal-react-native)
+- [Example app](#example-app)
+- [Under the hood](#under-the-hood)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Features
 
@@ -73,6 +103,38 @@ cd ios && pod install
 ```
 
 Make sure the New Architecture is enabled in your app (it is the default on recent React Native versions).
+
+### Use with Expo
+
+This library contains custom native code, so it **does not run in Expo Go**. Use an [Expo development build](https://docs.expo.dev/develop/development-builds/introduction/) instead — there's no config plugin to add, the module is autolinked during prebuild.
+
+```sh
+npx expo install react-native-shared-hero
+```
+
+Then build and run a development build (these run `prebuild` and compile the native project):
+
+```sh
+npx expo run:ios
+# or
+npx expo run:android
+```
+
+Or build it with [EAS](https://docs.expo.dev/develop/development-builds/create-a-build/):
+
+```sh
+eas build --profile development --platform ios   # or android
+```
+
+Requires the **New Architecture**, which is enabled by default on Expo SDK 52 and later. On older SDKs, enable it in `app.json` / `app.config.js`:
+
+```json
+{
+  "expo": {
+    "newArchEnabled": true
+  }
+}
+```
 
 ## Quick start
 
