@@ -1,0 +1,11 @@
+{
+  "extends": "./node_modules/@react-native/typescript-config/tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "react-native-shared-hero": ["../src/index"]
+    },
+    "types": ["react-native"],
+    "ignoreDeprecations": "6.0"
+  },
+  "include": ["src/**/*"]
+}
