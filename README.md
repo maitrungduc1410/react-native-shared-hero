@@ -1,3 +1,4 @@
+
 # react-native-shared-hero
 
 High-performance, fully-native shared-element ("hero") transitions for React Native. Every flight runs in **Swift and Kotlin** on the **New Architecture (Fabric)** — no JS-thread animation — and the library is **router-agnostic**: it matches a source and destination by id across mount/unmount and flies a snapshot in a window-level overlay, with no dependency on any navigation library.
@@ -6,11 +7,9 @@ High-performance, fully-native shared-element ("hero") transitions for React Nat
 
 ## Showcase
 
-<!-- TODO: paste your showcase screen recordings into the table below. -->
-
 | Android | iOS |
 | --- | --- |
-| <!-- TODO: paste Android showcase recording --> | <!-- TODO: paste iOS showcase recording --> |
+| <video src="https://github.com/user-attachments/assets/35170436-3921-43ad-ac1c-face5a00c7ec" controls loop muted></video> | <video src="https://github.com/user-attachments/assets/3aee83c7-190e-41fa-87b2-9a8ada59a481" controls loop muted></video> |
 
 ## Features
 
@@ -153,11 +152,9 @@ Each use case has a placeholder table for your Android and iOS recordings.
 
 The simplest case — a list thumbnail grows into the detail header using the default `snapshot` mode.
 
-<!-- TODO: paste recordings for Basic image hero -->
-
 | Android | iOS |
 | --- | --- |
-| <!-- TODO: paste Android recording --> | <!-- TODO: paste iOS recording --> |
+| <video src="https://github.com/user-attachments/assets/8902a96b-59cf-4893-a0fd-a5b4316b4abd" controls loop muted></video> | <video src="https://github.com/user-attachments/assets/65177700-0503-4ad5-9f7c-912f55cf6e45" controls loop muted></video> |
 
 ```tsx
 // List
@@ -175,11 +172,9 @@ The simplest case — a list thumbnail grows into the detail header using the de
 
 A shared hero originating in a virtualized `FlatList` of ~60 items — the source row may be recycled or unmounted while you scroll, yet the flight still resolves because matching is by `id`, not by view instance.
 
-<!-- TODO: paste recordings for FlatList (virtualized) -->
-
 | Android | iOS |
 | --- | --- |
-| <!-- TODO: paste Android recording --> | <!-- TODO: paste iOS recording --> |
+| <video src="https://github.com/user-attachments/assets/e575ddb3-bc1d-4ba0-b692-46342e983ce8" controls loop muted></video> | <video src="https://github.com/user-attachments/assets/c8b5e622-9479-480f-93aa-9da9fa00558a" controls loop muted></video> |
 
 ```tsx
 const renderItem = ({ item }) => (
@@ -195,11 +190,10 @@ const renderItem = ({ item }) => (
 
 `mode="morph"` interpolates corner radius, background color and bounds together — the Material container transform.
 
-<!-- TODO: paste recordings for Card morph -->
 
 | Android | iOS |
 | --- | --- |
-| <!-- TODO: paste Android recording --> | <!-- TODO: paste iOS recording --> |
+| <video src="https://github.com/user-attachments/assets/0d6a614a-0584-414a-ad20-b090a414ad8b" controls loop muted></video> | <video src="https://github.com/user-attachments/assets/6f64a280-2c31-4d24-91b8-cabbf2e24a66" controls loop muted></video> |
 
 ```tsx
 <SharedHero
@@ -217,11 +211,9 @@ const renderItem = ({ item }) => (
 
 Push a `presentation: 'modal'` native-stack screen with a shared element. The hero traverses the modal boundary because the overlay renders at the window level.
 
-<!-- TODO: paste recordings for Native modal hero -->
-
 | Android | iOS |
 | --- | --- |
-| <!-- TODO: paste Android recording --> | <!-- TODO: paste iOS recording --> |
+| <video src="https://github.com/user-attachments/assets/400aaaf4-834c-4b56-9685-039f550b3dae" controls loop muted></video> | <video src="https://github.com/user-attachments/assets/fa454b2c-52eb-44e2-b1e0-2b4365894ead" controls loop muted></video> |
 
 ```tsx
 <SharedHero id={`modal-${photo.id}`} namespace="modal" mode="snapshot" duration={380} style={styles.thumb}>
@@ -233,11 +225,9 @@ Push a `presentation: 'modal'` native-stack screen with a shared element. The he
 
 A `presentation: 'transparentModal'` screen — the case where the flying element would otherwise be obstructed. Window-level overlay rendering keeps the snapshot on top.
 
-<!-- TODO: paste recordings for Transparent modal hero -->
-
 | Android | iOS |
 | --- | --- |
-| <!-- TODO: paste Android recording --> | <!-- TODO: paste iOS recording --> |
+| <video src="https://github.com/user-attachments/assets/75c35270-4264-45c0-be64-f53ea62a2bbf" controls loop muted></video> | <video src="https://github.com/user-attachments/assets/67607ca1-05e3-4604-a151-5b175642d288" controls loop muted></video> |
 
 ```tsx
 <SharedHero
@@ -255,11 +245,9 @@ A `presentation: 'transparentModal'` screen — the case where the flying elemen
 
 A card inside a custom in-screen tab pane pushes to a stack detail and the element still flies — the registry only cares about id matching, not which navigator (or tab) hosted the trigger.
 
-<!-- TODO: paste recordings for Tabs hero -->
-
 | Android | iOS |
 | --- | --- |
-| <!-- TODO: paste Android recording --> | <!-- TODO: paste iOS recording --> |
+| <video src="https://github.com/user-attachments/assets/2de41d36-1a22-4064-b33c-3e498add10d0" controls loop muted></video> | <video src="https://github.com/user-attachments/assets/e27aae00-8c37-461b-ba8f-b15f306cd52d" controls loop muted></video> |
 
 ```tsx
 <SharedHero
@@ -277,11 +265,9 @@ A card inside a custom in-screen tab pane pushes to a stack detail and the eleme
 
 A `presentation: 'formSheet'` screen — a true UIKit sheet on iOS, the native-stack sheet style on Android. The hero flies into the sheet body.
 
-<!-- TODO: paste recordings for Sheet hero -->
-
 | Android | iOS |
 | --- | --- |
-| <!-- TODO: paste Android recording --> | <!-- TODO: paste iOS recording --> |
+| <video src="https://github.com/user-attachments/assets/33ab7627-e958-4477-8787-6642226c8a71" controls loop muted></video> | <video src="https://github.com/user-attachments/assets/ad56aa9d-eb1f-4157-9c9e-1822f699d4fe" controls loop muted></video> |
 
 ```tsx
 <SharedHero id={`sheet-${photo.id}`} namespace="sheet" mode="snapshot" duration={380} style={styles.hero}>
@@ -293,11 +279,9 @@ A `presentation: 'formSheet'` screen — a true UIKit sheet on iOS, the native-s
 
 No navigation at all — a `useState` toggle swaps a small `SharedHero` for a large one with the same `id`. A distinct React `key` forces an unmount→mount of the same id within one commit, which is exactly the router-agnostic in-place match path.
 
-<!-- TODO: paste recordings for In-place toggle -->
-
 | Android | iOS |
 | --- | --- |
-| <!-- TODO: paste Android recording --> | <!-- TODO: paste iOS recording --> |
+| <video src="https://github.com/user-attachments/assets/05a81333-c76f-4864-8047-4eb46a0e50d0" controls loop muted></video> | <video src="https://github.com/user-attachments/assets/d3020dbc-cf82-4cc7-bf77-98509f474f57" controls loop muted></video> |
 
 ```tsx
 {expanded ? (
@@ -315,11 +299,9 @@ No navigation at all — a `useState` toggle swaps a small `SharedHero` for a la
 
 The same hero with the two timing models side by side: a fixed `duration` with an easing curve, vs a physical `spring`.
 
-<!-- TODO: paste recordings for Spring vs duration -->
-
 | Android | iOS |
 | --- | --- |
-| <!-- TODO: paste Android recording --> | <!-- TODO: paste iOS recording --> |
+| <video src="https://github.com/user-attachments/assets/172f6e38-2c55-40dd-af5f-dfaae2eb79da" controls loop muted></video> | <video src="https://github.com/user-attachments/assets/530774c9-15b4-45c1-a987-cc927c5e1c2c" controls loop muted></video> |
 
 ```tsx
 // Duration timing
@@ -337,11 +319,9 @@ The same hero with the two timing models side by side: a fixed `duration` with a
 
 `motionPath="arc"` traces a quadratic curve between the source and destination centres, paired here with the `emphasized` easing.
 
-<!-- TODO: paste recordings for Arc path -->
-
 | Android | iOS |
 | --- | --- |
-| <!-- TODO: paste Android recording --> | <!-- TODO: paste iOS recording --> |
+| <video src="https://github.com/user-attachments/assets/1d951962-e393-48aa-8ad0-7e338a2d70f4" controls loop muted></video> | <video src="https://github.com/user-attachments/assets/58a7ab8b-aaa6-4254-8d3c-1db7f883c528" controls loop muted></video> |
 
 ```tsx
 <SharedHero
@@ -361,11 +341,9 @@ The same hero with the two timing models side by side: a fixed `duration` with a
 
 `fadeMode="through"` fades the source fully out before the destination's (totally different) layout fades in — Flutter's `flightShuttleBuilder` feel without the JSX gymnastics.
 
-<!-- TODO: paste recordings for Custom shuttle -->
-
 | Android | iOS |
 | --- | --- |
-| <!-- TODO: paste Android recording --> | <!-- TODO: paste iOS recording --> |
+| <video src="https://github.com/user-attachments/assets/8a489841-fea5-4fca-9728-2b549b0d6a0b" controls loop muted></video> | <video src="https://github.com/user-attachments/assets/f5bd5d09-48c1-4b9c-9705-182d07dd9512" controls loop muted></video> |
 
 ```tsx
 <SharedHero
@@ -385,11 +363,9 @@ The same hero with the two timing models side by side: a fixed `duration` with a
 
 A gesture-driven interactive return. On iOS the left-edge swipe-back is tracked frame-by-frame and synced to the navigator's transition coordinator (see [ARCHITECTURE.md](./ARCHITECTURE.md)). The example also demonstrates a JS-driven drag whose release slingshots the hero back to its origin cell.
 
-<!-- TODO: paste recordings for Gesture return -->
-
 | Android | iOS |
 | --- | --- |
-| <!-- TODO: paste Android recording --> | <!-- TODO: paste iOS recording --> |
+| <video src="https://github.com/user-attachments/assets/00ddc9a8-edac-4734-b229-baa12f0f4294" controls loop muted></video> | <video src="https://github.com/user-attachments/assets/0ffcaae6-be21-466a-9646-d9dc0a97e9b5" controls loop muted></video> |
 
 ```tsx
 // Keeping the hero mounted inside the dragged wrapper means the back-flight
@@ -405,11 +381,9 @@ A gesture-driven interactive return. On iOS the left-edge swipe-back is tracked 
 
 Each detail screen shows an "Up next" thumbnail; tapping it pushes a deeper detail whose big hero shares the tapped thumbnail's `id`, so a flight runs at every step of the chain.
 
-<!-- TODO: paste recordings for Multi-step navigation -->
-
 | Android | iOS |
 | --- | --- |
-| <!-- TODO: paste Android recording --> | <!-- TODO: paste iOS recording --> |
+| <video src="https://github.com/user-attachments/assets/425bb373-5a88-46cf-8fa3-3207938fa06c" controls loop muted></video> | <video src="https://github.com/user-attachments/assets/172ca32e-0e9a-44f0-8d69-90dcfad1c36e" controls loop muted></video> |
 
 ```tsx
 // Big hero for the current photo
@@ -427,11 +401,9 @@ Each detail screen shows an "Up next" thumbnail; tapping it pushes a deeper deta
 
 A hero into React Native's core `<Modal>` — on iOS a separate `UIWindow` (`RCTModalHostView`) outside the navigator, on Android a separate `Dialog` window. The overlay is layered above that window so the flight stays visible; `returnFlightEnabled={false}` is **not** used here, but the dismiss is a plain slide so the same id matches back to the list thumbnail.
 
-<!-- TODO: paste recordings for Core Modal (RN) -->
-
 | Android | iOS |
 | --- | --- |
-| <!-- TODO: paste Android recording --> | <!-- TODO: paste iOS recording --> |
+| <video src="https://github.com/user-attachments/assets/eb76f4bc-1014-4abd-b626-851b7577c9e9" controls loop muted></video> | <video src="https://github.com/user-attachments/assets/d70f7f85-8db7-482f-89af-d3dcba0d1169" controls loop muted></video> |
 
 ```tsx
 // Trigger in the list
