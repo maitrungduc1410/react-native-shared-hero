@@ -38,6 +38,7 @@ High-performance, fully-native shared-element ("hero") transitions for React Nat
   - [Core Modal (React Native)](#core-modal-react-native)
 - [Example app](#example-app)
 - [Under the hood](#under-the-hood)
+- [Roadmap](#roadmap)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -501,6 +502,17 @@ The interesting parts are native (Swift/Kotlin). Two docs go deep:
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — how the registry, snapshots, flights, overlay, and the interactive controllers work, plus the react-native-screens / navigation interop.
 - [LESSONS_LEARNED.md](./LESSONS_LEARNED.md) — the hard-won bugs, cross-window gotchas, and design decisions behind the current shape (and the rules that keep them from coming back).
+
+## Roadmap
+
+Planned for a future **v2**. These are **not implemented yet** — listed here so the direction is clear, and a couple already have reserved API placeholders that resolve to a sensible fallback today.
+
+- **Custom shuttle (`mode="shuttle"`)** — a native portal that renders a caller-supplied React subtree *during* the flight (à la Flutter's `flightShuttleBuilder`), instead of the snapshot crossfade. Today `mode="shuttle"` is an alias for `snapshot`.
+- **iOS 18 system zoom (`mode="zoom"` / `mode="auto"`)** — use UIKit's native zoom transition for `UINavigationController` pushes on iOS 18+, with `auto` picking it when available. Today both resolve to `morph`.
+- **Android predictive-back interactive return** — extend the frame-by-frame, coordinator-synced interactive returns (currently iOS edge-swipe and sheet swipe-dismiss) to Android's predictive back gesture.
+- **Finer image resize / alignment modes** — richer `resize` (auto / stretch / clip / none) and `align` controls for elements whose aspect ratio or content box differs between source and destination, closing the gap noted in [Why this library?](#why-this-library).
+
+Need one of these sooner? Open an issue describing the use case — concrete scenarios help prioritise.
 
 ## Contributing
 
