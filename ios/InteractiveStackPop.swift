@@ -261,7 +261,7 @@ import UIKit
       buildOverlay(for: pair)
     }
 
-    NSLog("[SharedHeroStackPop] adopt interactive pop detail=\(ObjectIdentifier(detail)) dest=\(ObjectIdentifier(dest)) pairs=\(pairs.count) active=\(active)")
+    heroLog(HeroLog.stackPop, "adopt interactive pop detail=\(ObjectIdentifier(detail)) dest=\(ObjectIdentifier(dest)) pairs=\(pairs.count) active=\(active)")
     return true
   }
 
@@ -375,7 +375,7 @@ import UIKit
           // CANCEL (tiny swipe that snapped back to rest): restore the list
           // cells we hid at adopt time and reset adopt state, staying
           // armed/ready for the next swipe. No flight — the detail never left.
-          NSLog("[SharedHeroStackPop] gesture cancelled before activation — restoring twins")
+          heroLog(HeroLog.stackPop, "gesture cancelled before activation — restoring twins")
           restoreTwins()
           return
         }
@@ -386,7 +386,7 @@ import UIKit
         // frame. Keeping the whole return inside the controller (the details
         // stay marked interactively-handled) means their unregister won't fire
         // the registry's late, mis-positioned back-flight.
-        NSLog("[SharedHeroStackPop] gesture committed before activation — synthesizing commit")
+        heroLog(HeroLog.stackPop, "gesture committed before activation — synthesizing commit")
         synthesizeOverlaysForCommit()
         beginSyncedFinish(
           cancelled: false,
@@ -426,7 +426,7 @@ import UIKit
       buildOverlay(for: pair)
     }
     active = true
-    NSLog("[SharedHeroStackPop] activate pairs=\(pairs.count) natural=\(naturalRect) dismissRef=\(dismissRef)")
+    heroLog(HeroLog.stackPop, "activate pairs=\(pairs.count) natural=\(naturalRect) dismissRef=\(dismissRef)")
   }
 
   /// Build a single pair's flight overlay from its clean source snapshot, hide
@@ -479,7 +479,7 @@ import UIKit
     for pair in pairs {
       buildOverlay(for: pair)
     }
-    NSLog("[SharedHeroStackPop] synthesizeOverlaysForCommit pairs=\(pairs.count)")
+    heroLog(HeroLog.stackPop, "synthesizeOverlaysForCommit pairs=\(pairs.count)")
   }
 
   private func driveOverlays(translation: CGFloat, progress p: CGFloat) {
@@ -505,7 +505,7 @@ import UIKit
     committing = true
     active = false
     commitDeadline = CACurrentMediaTime() + Self.maxCommitSettleSeconds
-    NSLog("[SharedHeroStackPop] beginCommit pairs=\(pairs.count)")
+    heroLog(HeroLog.stackPop, "beginCommit pairs=\(pairs.count)")
   }
 
   private func driveCommit() {
@@ -540,7 +540,7 @@ import UIKit
   }
 
   private func finishCommit() {
-    NSLog("[SharedHeroStackPop] finishCommit pairs=\(pairs.count)")
+    heroLog(HeroLog.stackPop, "finishCommit pairs=\(pairs.count)")
     for pair in pairs {
       pair.twin?.setHiddenForFlight(false)
       if let ov = pair.overlay {
@@ -589,7 +589,7 @@ import UIKit
     let opt = Self.animationOption(for: curve)
 
     if cancelled {
-      NSLog("[SharedHeroStackPop] syncedCancel dur=\(dur) pairs=\(live.count)")
+      heroLog(HeroLog.stackPop, "syncedCancel dur=\(dur) pairs=\(live.count)")
       // Fly each overlay back onto its detail hero's resting position in sync
       // with the page sliding back. Keep BOTH real heroes hidden for the whole
       // animation: the list thumbnail (twin) must NOT be revealed here — it's
@@ -626,7 +626,7 @@ import UIKit
         let finalRect = nonZero(pair.twin?.windowFrame())
           ?? nonZero(pair.twin?.settledWindowFrame())
           ?? ov.frame
-        NSLog("[SharedHeroStackPop] syncedCommit dur=\(dur) final=\(finalRect)")
+        heroLog(HeroLog.stackPop, "syncedCommit dur=\(dur) final=\(finalRect)")
         let twin = pair.twin
         UIView.animate(
           withDuration: dur,
@@ -678,7 +678,7 @@ import UIKit
   }
 
   private func finalizeCancel() {
-    NSLog("[SharedHeroStackPop] finalizeCancel pairs=\(pairs.count)")
+    heroLog(HeroLog.stackPop, "finalizeCancel pairs=\(pairs.count)")
     // The screen slid back to rest, so each real hero is already at its
     // `sourceRect` and the overlay (translation≈0, progress≈0) sits on top of
     // it — un-hide and remove with no visible jump.

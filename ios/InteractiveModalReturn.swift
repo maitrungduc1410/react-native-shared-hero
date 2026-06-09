@@ -69,6 +69,10 @@ import UIKit
   private var ready = false
   /// A downward drag is in progress and the overlay is live.
   private var active = false
+  /// The synced finish/cancel completion animation is running. While set the
+  /// display link must not fight it (the model frame has jumped to its final
+  /// value already).
+  private var finishing = false
 
   private var overlay: UIView?
   private var hostRetained = false
@@ -106,6 +110,7 @@ import UIKit
     self.twin = twin
     self.ready = false
     self.active = false
+    self.finishing = false
     self.lastY = .greatestFiniteMagnitude
     self.stableFrames = 0
     self.everAttached = false
@@ -128,6 +133,10 @@ import UIKit
   }
 
   @objc private func tick() {
+    // The synced finish/cancel animation owns everything now — don't let the
+    // display link fight it (the model frame has jumped to its final value).
+    if finishing { return }
+
     guard let detail = detail else { disarm(); return }
 
     // Hero off-window. Two very different cases:
@@ -176,6 +185,25 @@ import UIKit
       return
     }
 
+    let tc = Self.sheetTransitionCoordinator(detail.contentView)
+
+    // RELEASE DETECTION. Once the user lifts their finger the sheet's
+    // interactive dismissal stops being interactive and UIKit animates the
+    // completion by snapping the layer's MODEL value to its final state and
+    // animating only the PRESENTATION layer. `windowFrame()` is model-based, so
+    // it has just jumped to the end — stop finger-tracking and run our overlay
+    // animation SYNCED to UIKit's completion (same duration + curve) so the
+    // hero lands exactly as the sheet finishes sliding off (commit) or returns
+    // smoothly to rest (cancel) instead of snapping.
+    if active, let tc = tc, !tc.isInteractive {
+      beginSyncedFinish(
+        cancelled: tc.isCancelled,
+        duration: tc.transitionDuration,
+        curve: tc.completionCurve
+      )
+      return
+    }
+
     let translation = live.minY - naturalRect.minY
 
     if !active {
@@ -185,8 +213,10 @@ import UIKit
       return
     }
 
-    // Cancelled: sheet returned to rest with the overlay still live.
-    if translation <= Self.cancelThreshold {
+    // FALLBACK cancel detection only when there's no transition coordinator to
+    // observe (we can't sync to UIKit, so just restore at rest). With a
+    // coordinator the release-detection branch above handles cancel in sync.
+    if tc == nil, translation <= Self.cancelThreshold {
       finalizeCancel()
       return
     }
@@ -245,7 +275,7 @@ import UIKit
     HeroRegistry.shared.markInteractivelyHandled(detail)
     detail.emitTransitionStart()
     active = true
-    NSLog("[SharedHeroInteractive] activate detail=\(ObjectIdentifier(detail)) natural=\(naturalRect) dest=\(destRect) dismissRef=\(dismissRef)")
+    heroLog(HeroLog.interactive, "activate detail=\(ObjectIdentifier(detail)) natural=\(naturalRect) dest=\(destRect) dismissRef=\(dismissRef)")
   }
 
   private func driveOverlay(translation: CGFloat, progress p: CGFloat) {
@@ -263,7 +293,7 @@ import UIKit
     guard let ov = overlay else { disarm(); return }
     let twin = self.twin
     let detail = self.detail
-    NSLog("[SharedHeroInteractive] finalizeDismiss dest=\(destRect)")
+    heroLog(HeroLog.interactive, "finalizeDismiss dest=\(destRect)")
     UIView.animate(
       withDuration: 0.18,
       delay: 0,
@@ -303,7 +333,7 @@ import UIKit
 
   private func finalizeCancel() {
     guard let detail = detail else { disarm(); return }
-    NSLog("[SharedHeroInteractive] finalizeCancel")
+    heroLog(HeroLog.interactive, "finalizeCancel")
     // The sheet snapped back to rest, so the real hero is already at
     // `naturalRect` and the overlay (translation≈0, progress≈0) sits on top of
     // it — un-hide and remove with no visible jump.
@@ -316,6 +346,97 @@ import UIKit
     detail.emitTransitionEnd()
     active = false
     // Stay armed + ready so a subsequent drag re-triggers.
+  }
+
+  /// Run our overlay animation in lock-step with UIKit's sheet finish/cancel
+  /// completion after the user releases the swipe. `duration`/`curve` come from
+  /// the presented sheet's transition coordinator so we match the sheet's
+  /// slide-off (commit) or snap-back (cancel) exactly instead of snapping.
+  private func beginSyncedFinish(
+    cancelled: Bool,
+    duration: TimeInterval,
+    curve: UIView.AnimationCurve
+  ) {
+    guard let ov = overlay, let detail = detail else { disarm(); return }
+    finishing = true
+    active = false
+    let dur = duration > 0.05 ? duration : 0.3
+    let opt = Self.animationOption(for: curve)
+
+    if cancelled {
+      // The sheet snapped back to rest. Fly the overlay back onto the hero's
+      // natural resting position in sync with the sheet returning up, then
+      // reveal the real hero underneath with zero jump.
+      let twin = self.twin
+      heroLog(HeroLog.interactive, "syncedCancel dur=\(dur)")
+      UIView.animate(
+        withDuration: dur,
+        delay: 0,
+        options: [opt, .allowUserInteraction],
+        animations: {
+          ov.frame = self.naturalRect
+          ov.layer.cornerRadius = self.sourceCorner
+        },
+        completion: { _ in
+          detail.setHiddenForFlight(false)
+          twin?.setHiddenForFlight(false)
+          ov.removeFromSuperview()
+          if self.overlay === ov { self.overlay = nil }
+          self.releaseHostIfNeeded()
+          HeroRegistry.shared.unmarkInteractivelyHandled(detail)
+          detail.emitTransitionEnd()
+          self.finishing = false
+          // Stay armed + ready so a subsequent drag re-triggers.
+        }
+      )
+      return
+    }
+
+    // Commit: the sheet is sliding the rest of the way down and dismissing. The
+    // model frame has jumped to its final state, so the twin's settled frame
+    // now reports exactly where the list thumbnail will rest once the presenter
+    // scales back to identity. Fly the overlay there over the SAME
+    // duration/curve as the sheet completion, then crossfade to the real
+    // (now-settled) thumbnail.
+    let twin = self.twin
+    let finalRect = nonZero(twin?.settledWindowFrame())
+      ?? nonZero(twin?.windowFrame())
+      ?? destRect
+    heroLog(HeroLog.interactive, "syncedCommit dur=\(dur) final=\(finalRect)")
+    UIView.animate(
+      withDuration: dur,
+      delay: 0,
+      options: [opt, .allowUserInteraction],
+      animations: {
+        ov.frame = finalRect
+        ov.layer.cornerRadius = self.destCorner
+      },
+      completion: { _ in
+        twin?.setHiddenForFlight(false)
+        UIView.animate(
+          withDuration: 0.1,
+          animations: { ov.alpha = 0 },
+          completion: { _ in
+            ov.removeFromSuperview()
+            if self.overlay === ov { self.overlay = nil }
+            self.releaseHostIfNeeded()
+          }
+        )
+        detail.emitTransitionEnd()
+      }
+    )
+    // Tear down the link + refs now; the animation closures own the overlay.
+    //
+    // Deliberately DO NOT `unmarkInteractivelyHandled` here: the hero is being
+    // torn down and its deferred `commitUnregister` must keep taking the
+    // `alreadyFlighted` early-return branch so it does not fire a second,
+    // redundant back-flight. The stale entry is cleared by `register` when the
+    // view (or its recycled address) next mounts.
+    self.detail = nil
+    self.twin = nil
+    self.ready = false
+    self.finishing = false
+    stopLink()
   }
 
   private func releaseHostIfNeeded() {
@@ -342,9 +463,41 @@ import UIKit
     twin = nil
     ready = false
     active = false
+    finishing = false
   }
 
   // MARK: - Helpers.
+
+  /// The presented sheet's active transition coordinator, used to observe when
+  /// the interactive swipe is released and to match its finish/cancel duration
+  /// + curve. Walks the responder chain to the presented view controller (the
+  /// one with a `presentingViewController`) and returns its coordinator, which
+  /// UIKit sets for the duration of an interactive dismissal.
+  private static func sheetTransitionCoordinator(_ view: UIView) -> UIViewControllerTransitionCoordinator? {
+    var responder: UIResponder? = view
+    while let r = responder {
+      if let vc = r as? UIViewController, vc.presentingViewController != nil {
+        return vc.transitionCoordinator
+      }
+      responder = r.next
+    }
+    return nil
+  }
+
+  private static func animationOption(for curve: UIView.AnimationCurve) -> UIView.AnimationOptions {
+    switch curve {
+    case .easeIn: return .curveEaseIn
+    case .easeOut: return .curveEaseOut
+    case .easeInOut: return .curveEaseInOut
+    case .linear: return .curveLinear
+    @unknown default: return .curveEaseOut
+    }
+  }
+
+  private func nonZero(_ rect: CGRect?) -> CGRect? {
+    guard let rect = rect, rect != .zero else { return nil }
+    return rect
+  }
 
   /// True if `view` is hosted inside a presented sheet (`pageSheet` /
   /// `formSheet`) — the only modal styles UIKit lets the user swipe to dismiss.

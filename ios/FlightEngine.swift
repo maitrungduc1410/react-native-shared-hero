@@ -69,9 +69,9 @@ import UIKit
     } else {
       endGeo = geometry(of: dest)
     }
-    NSLog("[SharedHeroFlight] run sourceFrame=\(source.frame) destFrame=\(endGeo.frame) destSettled=\(dest.settledWindowFrame()) destVisible=\(dest.windowFrame()) override=\(destFrameOverride != nil) mode=\(cfg.mode) sourceHasImage=\(source.image != nil)")
+    heroLog(HeroLog.flight, "run sourceFrame=\(source.frame) destFrame=\(endGeo.frame) destSettled=\(dest.settledWindowFrame()) destVisible=\(dest.windowFrame()) override=\(destFrameOverride != nil) mode=\(cfg.mode) sourceHasImage=\(source.image != nil)")
     if endGeo.frame == .zero {
-      NSLog("[SharedHeroFlight] abort: dest not laid out")
+      heroLog(HeroLog.flight, "abort: dest not laid out")
       dest.setHiddenForFlight(false)
       sourceView?.setHiddenForFlight(false)
       onAllDone?()
@@ -90,7 +90,7 @@ import UIKit
     // crossfade; the destination's real content takes over the moment the
     // flight completes.
     guard source.image != nil else {
-      NSLog("[SharedHeroFlight] abort: no source bitmap")
+      heroLog(HeroLog.flight, "abort: no source bitmap")
       dest.setHiddenForFlight(false)
       sourceView?.setHiddenForFlight(false)
       onAllDone?()
@@ -98,7 +98,7 @@ import UIKit
     }
 
     let overlay = OverlayHost.shared.host()
-    NSLog("[SharedHeroFlight] overlay host obtained frame=\(overlay.frame) window=\(String(describing: overlay.window))")
+    heroLog(HeroLog.flight, "overlay host obtained frame=\(overlay.frame) window=\(String(describing: overlay.window))")
 
     let flightView = UIView(frame: initial.frame)
     flightView.backgroundColor = .clear
@@ -132,7 +132,7 @@ import UIKit
     let destImageView: UIImageView? = nil
 
     overlay.addSubview(flightView)
-    NSLog("[SharedHeroFlight] flightView added frame=\(flightView.frame) subviews=\(flightView.subviews.count) overlaySubviews=\(overlay.subviews.count)")
+    heroLog(HeroLog.flight, "flightView added frame=\(flightView.frame) subviews=\(flightView.subviews.count) overlaySubviews=\(overlay.subviews.count)")
 
     dest.setHiddenForFlight(true)
     dest.emitTransitionStart()

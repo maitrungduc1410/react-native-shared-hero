@@ -297,14 +297,14 @@ import UIKit
            let baseline = pending.baseline,
            baseline.settledFrame != .zero {
           pendingInPlace[viewId] = PendingInPlace(baseline: baseline, attemptsLeft: inPlaceMaxAttempts)
-          NSLog("[SharedHeroRegistry] register CHURN-CANCEL view=\(Self.id(view)) key=\(currentKey) — watching for in-place resize baseline=\(baseline.settledFrame)")
+          heroLog(HeroLog.registry, "register CHURN-CANCEL view=\(Self.id(view)) key=\(currentKey) — watching for in-place resize baseline=\(baseline.settledFrame)")
           scheduleInPlaceCheck(view: view)
         } else {
-          NSLog("[SharedHeroRegistry] register CHURN-CANCEL view=\(Self.id(view)) key=\(currentKey) — host navigator reparented, preserving state")
+          heroLog(HeroLog.registry, "register CHURN-CANCEL view=\(Self.id(view)) key=\(currentKey) — host navigator reparented, preserving state")
         }
         return
       } else {
-        NSLog("[SharedHeroRegistry] register key-changed during defer view=\(Self.id(view)) oldKey=\(pending.key) newKey=\(currentKey) — committing old unregister inline")
+        heroLog(HeroLog.registry, "register key-changed during defer view=\(Self.id(view)) oldKey=\(pending.key) newKey=\(currentKey) — committing old unregister inline")
         pendingUnregisters.removeValue(forKey: viewId)
         commitUnregister(view: pending.view, key: pending.key, baseline: pending.baseline, returnFlightEnabled: pending.returnFlightEnabled)
         // Fall through to regular register for the new key.
@@ -347,7 +347,7 @@ import UIKit
     bucket.append(WeakBox(view))
     live[key] = bucket
 
-    NSLog("[SharedHeroRegistry] register view=\(Self.id(view)) key=\(key) bucketSize=\(bucket.count) twin=\(twin.map { Self.id($0) } ?? "nil") sameWindow=\(twin.map { $0.contentView.window === view.contentView.window } ?? false)")
+    heroLog(HeroLog.registry, "register view=\(Self.id(view)) key=\(key) bucketSize=\(bucket.count) twin=\(twin.map { Self.id($0) } ?? "nil") sameWindow=\(twin.map { $0.contentView.window === view.contentView.window } ?? false)")
 
     if let twin = twin, twin !== view {
       runTwinFlight(source: twin, dest: view)
@@ -432,7 +432,7 @@ import UIKit
       let baseline = view.inPlaceBaselineSnapshot()
       pendingUnregisters[viewId] = PendingUnregister(view: view, key: key, baseline: baseline, returnFlightEnabled: view.config.returnFlightEnabled)
     }
-    NSLog("[SharedHeroRegistry] unregister DEFER view=\(Self.id(view)) key=\(key) baseline=\(pendingUnregisters[viewId]?.baseline?.settledFrame.debugDescription ?? "nil") pendingCount=\(pendingUnregisters.count)")
+    heroLog(HeroLog.registry, "unregister DEFER view=\(Self.id(view)) key=\(key) baseline=\(pendingUnregisters[viewId]?.baseline?.settledFrame.debugDescription ?? "nil") pendingCount=\(pendingUnregisters.count)")
     DispatchQueue.main.async { [weak self, weak view] in
       guard let self = self else { return }
       let pending = self.pendingUnregisters.removeValue(forKey: viewId)
@@ -467,7 +467,7 @@ import UIKit
   /// `Self.key(for: view)` since the view's config may have been mutated
   /// in the interim (e.g. by `prepareForRecycle`).
   private func commitUnregister(view: SharedHeroViewImpl, key: String, baseline: HeroSnapshot? = nil, returnFlightEnabled: Bool = true) {
-    NSLog("[SharedHeroRegistry] unregister COMMIT view=\(Self.id(view)) key=\(key)")
+    heroLog(HeroLog.registry, "unregister COMMIT view=\(Self.id(view)) key=\(key)")
     // A genuine unregister supersedes any in-place watch we had queued for
     // this instance (e.g. the view was torn down before it ever resized).
     pendingInPlace.removeValue(forKey: ObjectIdentifier(view))
@@ -509,7 +509,7 @@ import UIKit
     // call — the view's config may have been reset by the time this deferred
     // commit runs.)
     if !returnFlightEnabled {
-      NSLog("[SharedHeroRegistry] unregister quiet teardown (returnFlightEnabled=false) view=\(Self.id(view)) key=\(key)")
+      heroLog(HeroLog.registry, "unregister quiet teardown (returnFlightEnabled=false) view=\(Self.id(view)) key=\(key)")
       return
     }
 
@@ -579,7 +579,7 @@ import UIKit
         ?? liveTwin.contentView.window?.bounds.height
         ?? UIScreen.main.bounds.height
       if snap.frame.midY >= screenHeight {
-        NSLog("[SharedHeroRegistry] back-flight SUPPRESSED (interactive swipe dismiss — source offscreen snapMidY=\(snap.frame.midY) screenH=\(screenHeight)) dest=\(Self.id(liveTwin))")
+        heroLog(HeroLog.registry, "back-flight SUPPRESSED (interactive swipe dismiss — source offscreen snapMidY=\(snap.frame.midY) screenH=\(screenHeight)) dest=\(Self.id(liveTwin))")
         // Defensive: make sure the revealed thumbnail isn't left hidden by
         // any stale flight state.
         liveTwin.setHiddenForFlight(false)
@@ -594,7 +594,7 @@ import UIKit
       // natural (untransformed) position, which is what the hint must match.
       lastFlightSourceFrame[key] = snap.settledFrame != .zero ? snap.settledFrame : snap.frame
       let twinAttached = liveTwin.contentView.window != nil
-      NSLog("[SharedHeroRegistry] unregister-twin fire source=\(Self.id(view)) dest=\(Self.id(liveTwin)) twinAttached=\(twinAttached) cached=\(lastFlightSourceFrame[key]?.debugDescription ?? "nil")")
+      heroLog(HeroLog.registry, "unregister-twin fire source=\(Self.id(view)) dest=\(Self.id(liveTwin)) twinAttached=\(twinAttached) cached=\(lastFlightSourceFrame[key]?.debugDescription ?? "nil")")
       alreadyFlighted.insert(ObjectIdentifier(view))
       liveTwin.setHiddenForFlight(true)
       // No `destFrameHint` for the back-flight: the only returns that still
@@ -648,10 +648,10 @@ import UIKit
       liveSnap = live
       lastKnownSnapshots[key] = live
     } else if let cached = lastKnownSnapshots[key] {
-      NSLog("[SharedHeroRegistry] runTwinFlight using registry-cached snap source=\(Self.id(source)) key=\(key)")
+      heroLog(HeroLog.registry, "runTwinFlight using registry-cached snap source=\(Self.id(source)) key=\(key)")
       liveSnap = cached
     } else {
-      NSLog("[SharedHeroRegistry] runTwinFlight abort: source snapshot is nil and no cache source=\(Self.id(source)) key=\(key) inWindow=\(source.contentView.window != nil) bounds=\(source.contentView.bounds)")
+      heroLog(HeroLog.registry, "runTwinFlight abort: source snapshot is nil and no cache source=\(Self.id(source)) key=\(key) inWindow=\(source.contentView.window != nil) bounds=\(source.contentView.bounds)")
       return
     }
 
@@ -700,7 +700,7 @@ import UIKit
     // lays out at the natural position can match the hint — see comment
     // in the unregister-twin path for the drag-dismiss failure mode.
     lastFlightSourceFrame[key] = snap.settledFrame != .zero ? snap.settledFrame : snap.frame
-    NSLog("[SharedHeroRegistry] runTwinFlight source=\(Self.id(source)) dest=\(Self.id(dest)) sourceFrame=\(source.windowFrame()) liveFrame=\(liveSnap.frame) settledFrame=\(liveSnap.settledFrame) destFrameHint=\(destFrameHint?.debugDescription ?? "nil")")
+    heroLog(HeroLog.registry, "runTwinFlight source=\(Self.id(source)) dest=\(Self.id(dest)) sourceFrame=\(source.windowFrame()) liveFrame=\(liveSnap.frame) settledFrame=\(liveSnap.settledFrame) destFrameHint=\(destFrameHint?.debugDescription ?? "nil")")
 
     // INTERACTIVE EDGE-SWIPE POP.
     //
@@ -727,7 +727,7 @@ import UIKit
     // NEXT forward push still gets the correct symmetric landing hint even when
     // we defer this flight.
     if InteractiveStackPop.shared.tryAdoptInteractivePop(detail: source, dest: dest, sourceSnap: snap) {
-      NSLog("[SharedHeroRegistry] runTwinFlight DEFERRED to InteractiveStackPop (interactive pop) source=\(Self.id(source)) dest=\(Self.id(dest))")
+      heroLog(HeroLog.registry, "runTwinFlight DEFERRED to InteractiveStackPop (interactive pop) source=\(Self.id(source)) dest=\(Self.id(dest))")
       return
     }
 
@@ -787,7 +787,7 @@ import UIKit
       everAttached: dest.contentView.window != nil,
       attachDeadline: CACurrentMediaTime() + maxAttachWaitSeconds
     )
-    NSLog("[SharedHeroRegistry] queuePendingFlight dest=\(Self.id(dest)) source=\(source.map { Self.id($0) } ?? "nil") destFrameHint=\(destFrameHint?.debugDescription ?? "nil")")
+    heroLog(HeroLog.registry, "queuePendingFlight dest=\(Self.id(dest)) source=\(source.map { Self.id($0) } ?? "nil") destFrameHint=\(destFrameHint?.debugDescription ?? "nil")")
     schedulePoll(dest: dest)
   }
 
@@ -838,7 +838,7 @@ import UIKit
 
     pendingInPlace.removeValue(forKey: viewId)
     currentlyFlying.insert(viewId)
-    NSLog("[SharedHeroRegistry] in-place fire (sync layout) view=\(Self.id(view)) baseline=\(b) dest=\(dest)")
+    heroLog(HeroLog.registry, "in-place fire (sync layout) view=\(Self.id(view)) baseline=\(b) dest=\(dest)")
     // Hide + add the overlay synchronously in THIS layout transaction so
     // CoreAnimation batches the hide with the new-layout commit — the
     // destination state never appears uncovered. We pass `dest` as the
@@ -909,10 +909,10 @@ import UIKit
         // already at its real layout, so the worst case is the latest
         // toggle lands without animation.
         if currentlyFlying.contains(viewId) {
-          NSLog("[SharedHeroRegistry] in-place skip (already flying) view=\(Self.id(view))")
+          heroLog(HeroLog.registry, "in-place skip (already flying) view=\(Self.id(view))")
           return
         }
-        NSLog("[SharedHeroRegistry] in-place fire view=\(Self.id(view)) baseline=\(b) settled=\(settled)")
+        heroLog(HeroLog.registry, "in-place fire view=\(Self.id(view)) baseline=\(b) settled=\(settled)")
         // Fire the flight DIRECTLY (not via `queuePendingFlight`): we've
         // already verified the destination's settled frame here, so the
         // poll loop would only add a one-runloop-tick delay between hiding
@@ -938,7 +938,7 @@ import UIKit
     p.attemptsLeft -= 1
     if p.attemptsLeft <= 0 {
       pendingInPlace.removeValue(forKey: viewId)
-      NSLog("[SharedHeroRegistry] in-place discard (no resize → treated as reparent) view=\(Self.id(view)) settled=\(settled)")
+      heroLog(HeroLog.registry, "in-place discard (no resize → treated as reparent) view=\(Self.id(view)) settled=\(settled)")
       return
     }
     pendingInPlace[viewId] = p
@@ -982,7 +982,7 @@ import UIKit
       // before it ever attaches unhides instead of staying hidden.
       if let deadline = pending.attachDeadline, CACurrentMediaTime() > deadline {
         pendingFlights.removeValue(forKey: key)
-        NSLog("[SharedHeroRegistry] gave up waiting for dest to ATTACH dest=\(Self.id(dest))")
+        heroLog(HeroLog.registry, "gave up waiting for dest to ATTACH dest=\(Self.id(dest))")
         pending.source?.setHiddenForFlight(false)
         dest.setHiddenForFlight(false)
         return
@@ -1022,7 +1022,7 @@ import UIKit
       // flight is still animating, drop this one so we don't stack overlays
       // / re-hide the source mid-flight.
       if currentlyFlying.contains(key) {
-        NSLog("[SharedHeroRegistry] DUPLICATE FLIGHT SUPPRESSED dest=\(Self.id(dest))")
+        heroLog(HeroLog.registry, "DUPLICATE FLIGHT SUPPRESSED dest=\(Self.id(dest))")
         pendingFlights.removeValue(forKey: key)
         pending.source?.setHiddenForFlight(false)
         dest.setHiddenForFlight(false)
@@ -1030,7 +1030,7 @@ import UIKit
       }
       pendingFlights.removeValue(forKey: key)
       currentlyFlying.insert(key)
-      NSLog("[SharedHeroRegistry] flight fire dest=\(Self.id(dest)) sampledSettled=\(settled) destVisible=\(dest.windowFrame()) hint=\(pending.destFrameHint?.debugDescription ?? "nil") sourceSnap=\(pending.snap.frame) sourceSettled=\(pending.snap.settledFrame) attemptsUsed=\(maxLayoutAttempts - pending.attemptsLeft)")
+      heroLog(HeroLog.registry, "flight fire dest=\(Self.id(dest)) sampledSettled=\(settled) destVisible=\(dest.windowFrame()) hint=\(pending.destFrameHint?.debugDescription ?? "nil") sourceSnap=\(pending.snap.frame) sourceSettled=\(pending.snap.settledFrame) attemptsUsed=\(maxLayoutAttempts - pending.attemptsLeft)")
       // One-shot layer-chain dump for the destination. Lets us correlate
       // a wrong `settled` rect against the actual ancestor positions and
       // transforms; if e.g. `settledWindowFrame()` is returning a
@@ -1065,7 +1065,7 @@ import UIKit
       // that's been stable across a full push/pop cycle for this key); a
       // back-flight has no hint and lands at the freshly-sampled `settled`.
       let landingFrame: CGRect = pending.destFrameHint ?? settled
-      NSLog("[SharedHeroFlight] landing rect dest=\(Self.id(dest)) usedRect=\(landingFrame) source=\(pending.destFrameHint != nil ? "settled-hint" : "live-settled") sampledSettled=\(settled) destLive=\(dest.windowFrame()) destSettled=\(dest.settledWindowFrame())")
+      heroLog(HeroLog.flight, "landing rect dest=\(Self.id(dest)) usedRect=\(landingFrame) source=\(pending.destFrameHint != nil ? "settled-hint" : "live-settled") sampledSettled=\(settled) destLive=\(dest.windowFrame()) destSettled=\(dest.settledWindowFrame())")
       // Capture `key` by value (ObjectIdentifier is a value type) instead
       // of recomputing `ObjectIdentifier(dest)` inside the completion. If
       // `dest` is dealloc'd before the completion fires (e.g. user
@@ -1111,7 +1111,7 @@ import UIKit
         landing = nil
       }
       if let landing = landing {
-        NSLog("[SharedHeroRegistry] poll timeout: firing dest=\(Self.id(dest)) landing=\(landing) lastSettled=\(settled) destLive=\(dest.windowFrame()) hint=\(pending.destFrameHint?.debugDescription ?? "nil")")
+        heroLog(HeroLog.registry, "poll timeout: firing dest=\(Self.id(dest)) landing=\(landing) lastSettled=\(settled) destLive=\(dest.windowFrame()) hint=\(pending.destFrameHint?.debugDescription ?? "nil")")
         currentlyFlying.insert(key)
         pending.source?.setHiddenForFlight(true)
         FlightEngine.shared.run(
@@ -1124,7 +1124,7 @@ import UIKit
         }
         return
       }
-      NSLog("[SharedHeroRegistry] gave up waiting for dest layout dest=\(Self.id(dest))")
+      heroLog(HeroLog.registry, "gave up waiting for dest layout dest=\(Self.id(dest))")
       pending.source?.setHiddenForFlight(false)
       dest.setHiddenForFlight(false)
       return
@@ -1169,7 +1169,7 @@ import UIKit
       // the "ghost image floating over the detail screen" symptom from
       // the ArcPath bug report. Skip silently.
       if entry.sourceViewId == ObjectIdentifier(dest) {
-        NSLog("[SharedHeroRegistry] matchPass skip same-id churn key=\(key) dest=\(Self.id(dest))")
+        heroLog(HeroLog.registry, "matchPass skip same-id churn key=\(key) dest=\(Self.id(dest))")
         continue
       }
 
@@ -1177,7 +1177,7 @@ import UIKit
       let destFrameHint = lastFlightSourceFrame[key]
       // See `unregister(_:)` for why we cache `settledFrame`, not `frame`.
       lastFlightSourceFrame[key] = snap.settledFrame != .zero ? snap.settledFrame : snap.frame
-      NSLog("[SharedHeroRegistry] matchPass fire key=\(key) dest=\(Self.id(dest)) destFrameHint=\(destFrameHint?.debugDescription ?? "nil")")
+      heroLog(HeroLog.registry, "matchPass fire key=\(key) dest=\(Self.id(dest)) destFrameHint=\(destFrameHint?.debugDescription ?? "nil")")
       dest.setHiddenForFlight(true)
 
       // FAST PATH for the separate-window reappearance (core `<Modal>`
@@ -1215,7 +1215,7 @@ import UIKit
           abs(settled.height - hint.height) < tol
         if ready {
           currentlyFlying.insert(destId)
-          NSLog("[SharedHeroRegistry] matchPass fire SYNC dest=\(Self.id(dest)) landing=\(hint) settled=\(settled)")
+          heroLog(HeroLog.registry, "matchPass fire SYNC dest=\(Self.id(dest)) landing=\(hint) settled=\(settled)")
           FlightEngine.shared.run(
             from: snap,
             sourceView: nil,

@@ -76,7 +76,7 @@ public typealias SharedHeroEventEmitter = (_ id: String, _ namespace: String) ->
 
   /// Called from the shim when the view is mounted into the window.
   @objc public func didMoveToWindow(_ window: UIWindow?) {
-    NSLog("[SharedHeroImpl] didMoveToWindow window=\(window != nil) view=\(ObjectIdentifier(self)) id=\(config.heroId) ns=\(config.heroNamespace) bounds=\(contentView.bounds) stashed=\(stashedSnapshot != nil)")
+    heroLog(HeroLog.impl, "didMoveToWindow window=\(window != nil) view=\(ObjectIdentifier(self)) id=\(config.heroId) ns=\(config.heroNamespace) bounds=\(contentView.bounds) stashed=\(stashedSnapshot != nil)")
     if window != nil, config.enabled, !config.heroId.isEmpty {
       // Intentionally DO NOT wipe `stashedSnapshot` here. Previously we
       // cleared it on re-attach, but that left a window of fragility: if
@@ -331,23 +331,23 @@ public typealias SharedHeroEventEmitter = (_ id: String, _ namespace: String) ->
     return result
   }
 
-  /// Diagnostic logger: emits ONE NSLog per ancestor in the layer chain
+  /// Diagnostic logger: emits ONE log line per ancestor in the layer chain
   /// with its position / bounds / transform translation. Useful for
   /// figuring out which container is responsible for an unexpected
   /// `windowFrame()` value (e.g. a parallax-shifted result that
   /// `settledWindowFrame()` should be ignoring).
   ///
-  /// We emit one NSLog per line rather than one big multi-line string
+  /// We emit one log line per ancestor rather than one big multi-line string
   /// because the Apple System Log truncates payloads above ~1 KB, and the
   /// chain is typically 12+ levels deep on react-native-screens — the
   /// truncation hides exactly the upper levels where host-navigator
   /// transforms live, defeating the whole point of dumping the chain.
   func dumpLayerChain(prefix: String) {
     guard let window = contentView.window else {
-      NSLog("[SharedHeroChain] \(prefix) view=\(ObjectIdentifier(self)) NO WINDOW")
+      heroLog(HeroLog.chain, "\(prefix) view=\(ObjectIdentifier(self)) NO WINDOW")
       return
     }
-    NSLog("[SharedHeroChain] \(prefix) view=\(ObjectIdentifier(self)) settled=\(settledWindowFrame()) visible=\(windowFrame()) ====")
+    heroLog(HeroLog.chain, "\(prefix) view=\(ObjectIdentifier(self)) settled=\(settledWindowFrame()) visible=\(windowFrame()) ====")
     var layer: CALayer? = contentView.layer
     let windowLayer = window.layer
     var depth = 0
@@ -356,13 +356,14 @@ public typealias SharedHeroEventEmitter = (_ id: String, _ namespace: String) ->
       let isIdentity = CATransform3DIsIdentity(t)
       let viewCls = (l.delegate as? UIView).map { String(describing: type(of: $0)) } ?? "—"
       let layerCls = String(describing: type(of: l))
-      NSLog(
-        "[SharedHeroChain] \(prefix) [\(depth)] view=\(viewCls) layer=\(layerCls) pos=(\(l.position.x.rounded()),\(l.position.y.rounded())) bnds=\(l.bounds) bnds.origin=(\(l.bounds.origin.x),\(l.bounds.origin.y)) tx=\(t.m41) ty=\(t.m42) m11=\(t.m11) m22=\(t.m22) identity=\(isIdentity)"
+      heroLog(
+        HeroLog.chain,
+        "\(prefix) [\(depth)] view=\(viewCls) layer=\(layerCls) pos=(\(l.position.x.rounded()),\(l.position.y.rounded())) bnds=\(l.bounds) bnds.origin=(\(l.bounds.origin.x),\(l.bounds.origin.y)) tx=\(t.m41) ty=\(t.m42) m11=\(t.m11) m22=\(t.m22) identity=\(isIdentity)"
       )
       depth += 1
       layer = l.superlayer
     }
-    NSLog("[SharedHeroChain] \(prefix) chain depth=\(depth) reachedWindow=\(layer === windowLayer)")
+    heroLog(HeroLog.chain, "\(prefix) chain depth=\(depth) reachedWindow=\(layer === windowLayer)")
   }
 
   // MARK: - Flight visibility.
@@ -409,7 +410,7 @@ public typealias SharedHeroEventEmitter = (_ id: String, _ namespace: String) ->
         shim.alpha = savedShimAlpha
       }
     }
-    NSLog("[SharedHeroImpl] setHiddenForFlight=\(hidden) view=\(ObjectIdentifier(self)) contentSubviews=\(contentView.subviews.count) inWindow=\(contentView.window != nil) stashed=\(stashedSnapshot != nil)")
+    heroLog(HeroLog.impl, "setHiddenForFlight=\(hidden) view=\(ObjectIdentifier(self)) contentSubviews=\(contentView.subviews.count) inWindow=\(contentView.window != nil) stashed=\(stashedSnapshot != nil)")
   }
 
   // MARK: - Snapshot capture.
@@ -534,10 +535,10 @@ public typealias SharedHeroEventEmitter = (_ id: String, _ namespace: String) ->
       return fresh
     }
     if let stash = stashedSnapshot {
-      NSLog("[SharedHeroImpl] captureSnapshot falling back to stash view=\(ObjectIdentifier(self)) inWindow=\(contentView.window != nil) bounds=\(contentView.bounds)")
+      heroLog(HeroLog.impl, "captureSnapshot falling back to stash view=\(ObjectIdentifier(self)) inWindow=\(contentView.window != nil) bounds=\(contentView.bounds)")
       return stash
     }
-    NSLog("[SharedHeroImpl] captureSnapshot returned nil (no live & no stash) view=\(ObjectIdentifier(self)) inWindow=\(contentView.window != nil) bounds=\(contentView.bounds)")
+    heroLog(HeroLog.impl, "captureSnapshot returned nil (no live & no stash) view=\(ObjectIdentifier(self)) inWindow=\(contentView.window != nil) bounds=\(contentView.bounds)")
     return nil
   }
 

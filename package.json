@@ -1,6 +1,6 @@
 {
   "name": "react-native-shared-hero",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "High-performance native shared element (hero) transitions for React Native — Fabric (New Architecture), router-agnostic, iOS & Android.",
   "main": "./lib/module/index.js",
   "types": "./lib/typescript/src/index.d.ts",

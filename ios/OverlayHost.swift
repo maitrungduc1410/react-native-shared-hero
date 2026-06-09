@@ -41,7 +41,7 @@ import UIKit
     activeFlightCount += 1
     let win = window!
     let root = win.rootViewController!.view!
-    NSLog("[SharedHeroOverlay] host count=\(activeFlightCount) winFrame=\(win.frame) winLevel=\(win.windowLevel.rawValue) rootFrame=\(root.frame)")
+    heroLog(HeroLog.overlay, "host count=\(activeFlightCount) winFrame=\(win.frame) winLevel=\(win.windowLevel.rawValue) rootFrame=\(root.frame)")
     return root
   }
 
@@ -49,7 +49,7 @@ import UIKit
   /// the type-level doc comment.
   func releaseHost() {
     activeFlightCount = max(0, activeFlightCount - 1)
-    NSLog("[SharedHeroOverlay] release count=\(activeFlightCount)")
+    heroLog(HeroLog.overlay, "release count=\(activeFlightCount)")
   }
 
   private func ensureWindow() {
@@ -81,7 +81,7 @@ import UIKit
     // very first flight doesn't pay the "window appearing for the first
     // time" frame cost that produced the white-flash artifact.
     win.isHidden = false
-    NSLog("[SharedHeroOverlay] window created frame=\(frame) scene=\(String(describing: scene))")
+    heroLog(HeroLog.overlay, "window created frame=\(frame) scene=\(String(describing: scene))")
     self.window = win
   }
 }
