@@ -19,38 +19,33 @@ import com.facebook.react.viewmanagers.SharedHeroViewManagerDelegate
 import com.facebook.react.viewmanagers.SharedHeroViewManagerInterface
 
 /**
- * Extends [ReactClippingViewManager] (not plain `ViewGroupManager`) so we
- * inherit `removeClippedSubviews` and the standard
- * layout/transform/opacity prop pipeline.
+ * Extends [ReactClippingViewManager] (not plain `ViewGroupManager`) to inherit
+ * `removeClippedSubviews` and the standard layout/transform/opacity pipeline.
  *
  * ## Why we wrap the codegen delegate
  *
- * `<SharedHero>` is a Fabric component whose props are dispatched through
- * the codegen-generated [SharedHeroViewManagerDelegate]. That delegate
- * handles our component-specific props (`heroId`, `mode`, `duration`, …)
- * and falls through to [com.facebook.react.uimanager.BaseViewManagerDelegate]
- * for everything else.
+ * `<SharedHero>` is a Fabric component whose props dispatch through the codegen
+ * [SharedHeroViewManagerDelegate], which handles our component-specific props
+ * (`heroId`, `mode`, `duration`, …) and falls through to
+ * [com.facebook.react.uimanager.BaseViewManagerDelegate] for the rest.
  *
- * `BaseViewManagerDelegate.setProperty(BORDER_RADIUS, …)` calls
- * `mViewManager.setBorderRadius(view, Float)` — the DEPRECATED Float
- * overload on [com.facebook.react.uimanager.BaseViewManager], which is
- * literally a `logUnsupportedPropertyWarning(...)` no-op. The new
- * `setBorderRadius(view, Int, Dynamic)` overload that
- * [com.facebook.react.views.view.ReactViewManager] introduced — and that
- * actually routes through [BackgroundStyleApplicator] — is **not** in any
- * base class we can inherit (`ReactViewManager` is hard-fixed to
- * `ReactViewGroup` as its generic parameter, so we can't extend it).
+ * But `BaseViewManagerDelegate.setProperty(BORDER_RADIUS, …)` calls the
+ * DEPRECATED `setBorderRadius(view, Float)` overload on
+ * [com.facebook.react.uimanager.BaseViewManager] — a
+ * `logUnsupportedPropertyWarning(...)` no-op. The working
+ * `setBorderRadius(view, Int, Dynamic)` overload (which routes through
+ * [BackgroundStyleApplicator]) lives only on
+ * [com.facebook.react.views.view.ReactViewManager], which we can't extend (it's
+ * hard-fixed to `ReactViewGroup` as its generic parameter).
  *
- * The end result: writing `<SharedHero style={{ borderRadius, overflow,
- * borderWidth, borderColor, ... }}>` was silently dropping those props on
- * Android while iOS continued to work. Stamping per-prop `@ReactProp`
- * methods on this manager doesn't fix it either — codegen-fronted
- * Fabric components bypass the `@ReactProp` reflection path entirely.
+ * So `<SharedHero style={{ borderRadius, overflow, borderWidth, borderColor,
+ * ... }}>` was silently dropping those props on Android while iOS worked.
+ * Per-prop `@ReactProp` methods don't help either — codegen-fronted Fabric
+ * components bypass the `@ReactProp` reflection path entirely.
  *
- * The fix is to wrap the codegen delegate with [HeroStylePropDelegate],
- * which intercepts the standard view-style prop names and routes them
- * through `BackgroundStyleApplicator` directly before falling through to
- * the codegen + base delegate chain for everything else.
+ * Fix: wrap the codegen delegate with [HeroStylePropDelegate], which intercepts
+ * the standard view-style prop names and routes them through
+ * `BackgroundStyleApplicator` before deferring to the codegen+base chain.
  */
 @ReactModule(name = SharedHeroViewManager.NAME)
 class SharedHeroViewManager :
@@ -78,19 +73,15 @@ class SharedHeroViewManager :
   /**
    * Defensive cleanup for Fabric view recycling.
    *
-   * `BaseViewManager.prepareToRecycleView` returns the view if it can be
-   * recycled, or `null` otherwise. We reset all hero-specific state on
-   * the surviving view so its next logical mount starts from scratch —
-   * stale `hiddenForFlight` / `stashedSnapshot` / `config` from the
-   * previous lifecycle would otherwise leak through and make the next
-   * `SharedHero` mounted at this same view instance render invisible or
-   * fly the wrong bitmap.
+   * `super.prepareToRecycleView` returns the view if recyclable, else `null`.
+   * We reset all hero-specific state on the survivor so its next mount starts
+   * fresh — stale `hiddenForFlight` / `stashedSnapshot` / `config` would
+   * otherwise leak through and make the next `SharedHero` at this instance
+   * render invisible or fly the wrong bitmap.
    *
-   * NOTE: This hook only actually fires if recycling is enabled for our
-   * view (i.e. someone called `setupViewRecycling()` on the manager, or
-   * Fabric flips its default). We don't opt in today, but the cost of
-   * being defensive here is one nil-guarded function call, so it's
-   * worth wiring up.
+   * NOTE: only fires if recycling is enabled (someone calls
+   * `setupViewRecycling()`, or Fabric flips its default). We don't opt in today,
+   * but the defensive cost is one nil-guarded call.
    */
   override fun prepareToRecycleView(
     reactContext: ThemedReactContext,
@@ -103,10 +94,10 @@ class SharedHeroViewManager :
 
   /**
    * Called by Fabric when a view is permanently dropped (not recycled).
-   * `onDetachedFromWindow` should already have unregistered us, but if
-   * the mounting layer ever drops a view that never went through a
-   * detach (e.g. surface teardown), this ensures we don't leave a stale
-   * weak ref in [HeroRegistry] or a flight half-armed.
+   * `onDetachedFromWindow` should already have unregistered us, but if the
+   * mounting layer drops a view that never detached (e.g. surface teardown),
+   * this avoids leaving a stale weak ref in [HeroRegistry] or a half-armed
+   * flight.
    */
   override fun onDropViewInstance(view: SharedHeroView) {
     super.onDropViewInstance(view)
@@ -121,10 +112,9 @@ class SharedHeroViewManager :
   }
 
   // `BaseViewManagerDelegate` already routes `BACKGROUND_COLOR` to
-  // `mViewManager.setBackgroundColor(view, Int)` via
-  // `BackgroundStyleApplicator`, so unlike `borderRadius` / `overflow` we
-  // only need to OVERRIDE this (not intercept it in the delegate) to mirror
-  // the value onto the view for the morph-mode flight engine.
+  // `setBackgroundColor(view, Int)` via `BackgroundStyleApplicator`, so unlike
+  // `borderRadius` / `overflow` we just OVERRIDE this (no delegate intercept) to
+  // mirror the value onto the view for the morph-mode flight engine.
   override fun setBackgroundColor(view: SharedHeroView, backgroundColor: Int) {
     super.setBackgroundColor(view, backgroundColor)
     view.backgroundColorInt = backgroundColor
@@ -200,26 +190,23 @@ class SharedHeroViewManager :
 /**
  * Style-prop interceptor that fixes Fabric prop dispatch for [SharedHeroView].
  *
- * The standard React Native view-style props (`borderRadius`, `overflow`,
- * `borderWidth`, `borderColor`, `borderStyle`) need to flow through
- * [BackgroundStyleApplicator] to render. The default Fabric path for a
- * codegen-fronted component (codegen delegate → [BaseViewManagerDelegate])
- * either routes them to deprecated no-op `BaseViewManager` setters
- * (`BORDER_RADIUS` only invokes the Float overload that just logs
- * "unsupported property"), or drops them entirely (`OVERFLOW`,
- * `BORDER_STYLE`, per-side `BORDER_WIDTH` / `BORDER_COLOR`) because they
- * aren't in `BaseViewManagerDelegate.setProperty`'s switch at all.
+ * The standard RN view-style props (`borderRadius`, `overflow`, `borderWidth`,
+ * `borderColor`, `borderStyle`) must flow through [BackgroundStyleApplicator]
+ * to render. The default codegen-fronted path (codegen delegate →
+ * [BaseViewManagerDelegate]) either routes them to deprecated no-op setters
+ * (`BORDER_RADIUS` hits only the Float "unsupported property" overload) or
+ * drops them entirely (`OVERFLOW`, `BORDER_STYLE`, per-side `BORDER_WIDTH` /
+ * `BORDER_COLOR` aren't in its switch at all).
  *
- * We intercept those names and apply them ourselves the same way
+ * We intercept those names and apply them as
  * [com.facebook.react.views.view.ReactViewManager] does for stock
- * `ReactViewGroup`, then defer to the codegen delegate (which handles
- * our component-specific props + the rest of the base-manager-supported
- * props like `backgroundColor`, `transform`, `opacity`, …).
+ * `ReactViewGroup`, then defer to the codegen delegate for our
+ * component-specific props + the rest (`backgroundColor`, `transform`,
+ * `opacity`, …).
  *
- * NOTE: This file lives next to [SharedHeroViewManager] rather than in
- * its own module because it has no public surface and is meaningless in
- * isolation — it knows about the exact set of props the codegen delegate
- * fails to dispatch for `SharedHeroView` specifically.
+ * NOTE: lives next to [SharedHeroViewManager] (not its own module) since it has
+ * no public surface and is meaningless in isolation — it knows the exact props
+ * the codegen delegate fails to dispatch for `SharedHeroView`.
  */
 private class HeroStylePropDelegate(
   private val inner: ViewManagerDelegate<SharedHeroView>,
@@ -289,13 +276,12 @@ private class HeroStylePropDelegate(
     val prop = BORDER_RADIUS_PROPS.getValue(propName)
     val lp = LengthPercentage.setFromDynamic(DynamicFromObject(value))
     BackgroundStyleApplicator.setBorderRadius(view, prop, lp)
-    // Mirror the all-corners radius onto the view so the flight engine can
-    // read it back as physical pixels for the overlay's corner interpolation.
-    // `LengthPercentage` stores POINT values in CSS px (== dp on Android), so
-    // we multiply by the display density to match the px-space geometry the
-    // rest of the flight pipeline operates in. Percentage radii are skipped
-    // here (they'd need the resolved size, which we don't have at prop-set
-    // time) — the flight will just use 0 for those edge cases.
+    // Mirror the all-corners radius onto the view so the flight engine reads it
+    // back as physical pixels for corner interpolation. `LengthPercentage`
+    // stores POINT values in CSS px (== dp on Android), so multiply by display
+    // density to match the px-space geometry the rest of the pipeline uses.
+    // Percentage radii are skipped (they'd need the resolved size, unavailable
+    // at prop-set time) — the flight just uses 0 for those.
     if (prop == BorderRadiusProp.BORDER_RADIUS) {
       val dp = lp?.takeIf { it.type == LengthPercentageType.POINT }?.resolve(0f) ?: 0f
       view.cornerRadiusPx = PixelUtil.toPixelFromDIP(dp)

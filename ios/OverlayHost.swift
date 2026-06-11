@@ -4,19 +4,17 @@ import UIKit
 /// A library-owned UIWindow that hosts flying snapshots above every
 /// presentation context (modal, transparentModal, sheet, alert).
 ///
-/// The window is created lazily on first hero registration and **stays
-/// visible forever after** — toggling `UIWindow.isHidden` per flight causes
-/// a one-frame "window not yet on screen" gap at the start of each flight,
-/// during which the user sees the source view's parent background (white)
-/// instead of the flight overlay. The symptom is a quick white flash at
-/// the tapped image's position before the flight overlay catches up.
+/// Created lazily on first hero registration and **stays visible forever
+/// after**: toggling `UIWindow.isHidden` per flight causes a one-frame "window
+/// not yet on screen" gap at each flight's start, during which the user sees the
+/// source's parent background (white) instead of the overlay — a quick white
+/// flash at the tapped image's position.
 ///
-/// Because the window is transparent (`backgroundColor = .clear`) and
-/// non-interactive (`isUserInteractionEnabled = false`), keeping it
-/// permanently visible has no visual or input cost when no flights are
-/// active. We defer status-bar and rotation queries to the underlying app's
-/// topmost view controller (see [OverlayRootViewController]) so the app's
-/// preferences still drive system chrome.
+/// Transparent (`backgroundColor = .clear`) and non-interactive
+/// (`isUserInteractionEnabled = false`), so staying permanently visible costs
+/// nothing when idle. Status-bar / rotation queries defer to the app's topmost
+/// view controller (see [OverlayRootViewController]) so the app's preferences
+/// still drive system chrome.
 @objc public final class OverlayHost: NSObject {
   @objc public static let shared = OverlayHost()
 
@@ -27,10 +25,9 @@ import UIKit
     super.init()
   }
 
-  /// Pre-create the overlay window so it has time to complete its first
-  /// render pass on a separate UIWindow render server flush before any
-  /// flight actually adds a subview. Called from `HeroRegistry.register`
-  /// so the window is up well before the user's first tap.
+  /// Pre-create the overlay window so it completes its first render-server flush
+  /// before any flight adds a subview. Called from `HeroRegistry.register` so the
+  /// window is up well before the user's first tap.
   @objc public func prepare() {
     ensureWindow()
   }
@@ -45,8 +42,8 @@ import UIKit
     return root
   }
 
-  /// Decrement the active-flight counter. The window stays visible — see
-  /// the type-level doc comment.
+  /// Decrement the active-flight counter. The window stays visible — see the
+  /// type doc.
   func releaseHost() {
     activeFlightCount = max(0, activeFlightCount - 1)
     heroLog(HeroLog.overlay, "release count=\(activeFlightCount)")
@@ -76,9 +73,8 @@ import UIKit
     win.rootViewController = root
     root.view.frame = frame
     root.view.backgroundColor = .clear
-    // Show the window immediately. This is the key change vs. the previous
-    // version: by leaving the window visible (just transparent + empty) the
-    // very first flight doesn't pay the "window appearing for the first
+    // Show the window immediately: leaving it visible (transparent + empty)
+    // means the first flight doesn't pay the "window appearing for the first
     // time" frame cost that produced the white-flash artifact.
     win.isHidden = false
     heroLog(HeroLog.overlay, "window created frame=\(frame) scene=\(String(describing: scene))")
@@ -87,9 +83,9 @@ import UIKit
 }
 
 /// Transparent host VC that defers status-bar / rotation preferences to the
-/// underlying app's topmost view controller. Without this deferral, our
-/// always-visible overlay window (which is the topmost window in the app)
-/// would force its own — typically wrong — preferences onto the system.
+/// app's topmost view controller. Without the deferral, our always-visible
+/// (topmost) overlay window would force its own — typically wrong — preferences
+/// onto the system.
 private final class OverlayRootViewController: UIViewController {
   override func loadView() {
     let v = PassThroughView()

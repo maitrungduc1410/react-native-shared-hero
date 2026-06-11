@@ -30,26 +30,22 @@ import UIKit
   }
 
   /// Runs a flight from a previously-captured [source] snapshot to a still-
-  /// mounted [dest] view. Capturing the source up-front means the engine
-  /// survives the host navigator detaching / moving the original source view
-  /// during the navigation animation.
+  /// mounted [dest] view. Capturing the source up-front lets the engine survive
+  /// the host navigator detaching / moving the original source mid-transition.
   ///
-  /// `sourceView` is the live source `SharedHeroViewImpl` (when available);
-  /// it's un-hidden after the soft handoff so that when the user navigates
-  /// back the source view's real content is visible. Pass `nil` for flights
-  /// where the source no longer exists (e.g. the in-place match path).
+  /// `sourceView` is the live source `SharedHeroViewImpl` (when available),
+  /// un-hidden after the soft handoff so its real content shows once the user
+  /// navigates back. Pass `nil` when the source no longer exists (e.g. in-place).
   ///
-  /// `destFrameOverride` lets the caller pin the flight's landing rect
-  /// instead of re-reading `dest.settledWindowFrame()` here. The registry's
-  /// poll loop uses this to pass the rect it just verified as stable across
-  /// runloop ticks, so we don't re-sample a transient layout value that
-  /// happens to differ from the verified one (e.g. when
-  /// `react-native-screens` re-attaches the previous screen during an
-  /// interactive pop and Fabric is still committing the chain's positions).
+  /// `destFrameOverride` pins the landing rect instead of re-reading
+  /// `dest.settledWindowFrame()` here. The registry's poll loop passes the rect
+  /// it verified stable across ticks, so we don't re-sample a transient layout
+  /// value (e.g. while `react-native-screens` re-attaches the previous screen
+  /// during an interactive pop and Fabric is still committing positions).
   ///
-  /// `onAllDone` is invoked when the flight has fully completed (after the
-  /// soft-handoff fade-out). Caller uses this to release any per-flight
-  /// state (e.g. duplicate-suppression bookkeeping in the registry).
+  /// `onAllDone` fires once the flight fully completes (after the soft-handoff
+  /// fade-out); the caller releases per-flight state (e.g. the registry's
+  /// duplicate-suppression bookkeeping).
   func run(
     from source: HeroSnapshot,
     sourceView: SharedHeroViewImpl?,
@@ -83,12 +79,11 @@ import UIKit
       backgroundColor: source.backgroundColor
     )
 
-    // NOTE: in v1 we only fly the source bitmap. Capturing the destination
-    // bitmap here would require temporarily un-hiding `dest.contentView`,
-    // which causes a one-frame flicker because Core Animation can commit the
-    // un-hide before our re-hide. We use the source as both ends of the
-    // crossfade; the destination's real content takes over the moment the
-    // flight completes.
+    // v1 flies only the source bitmap. Capturing the dest bitmap would need a
+    // temporary un-hide of `dest.contentView`, which flickers for one frame
+    // (Core Animation can commit the un-hide before our re-hide). We use the
+    // source for both crossfade ends; the dest's real content takes over the
+    // moment the flight completes.
     guard source.image != nil else {
       heroLog(HeroLog.flight, "abort: no source bitmap")
       dest.setHiddenForFlight(false)
@@ -106,9 +101,9 @@ import UIKit
     flightView.layer.cornerRadius = initial.cornerRadius
     flightView.layer.masksToBounds = true
 
-    // `zoom` / `auto` reserved for iOS 18+ system zoom delegation (v2). For
-    // now they alias to `morph` so consumers can adopt the API surface and
-    // benefit automatically once the imperative pre-push wiring lands.
+    // `zoom` / `auto` reserved for iOS 18+ system zoom delegation (v2); for now
+    // they alias `morph` so consumers can adopt the API surface and benefit
+    // automatically once the imperative pre-push wiring lands.
     let isMorph = cfg.mode == "morph"
       || cfg.mode == "zoom"
       || cfg.mode == "auto"
@@ -137,18 +132,12 @@ import UIKit
     dest.setHiddenForFlight(true)
     dest.emitTransitionStart()
 
-    // Soft handoff:
-    //  1. Geometric flight runs (frame / cornerRadius / bg).
-    //  2. Reveal the real destination content (still blank if its <Image> is
-    //     loading) UNDER the flight view.
-    //  3. Fade the flight view out over a short window so the user sees either
-    //     the loaded dest emerging through the fade, or a gentle fade to blank
-    //     instead of a hard pop.
-    //  4. Un-hide the source so when the user navigates back its real content
-    //     is in place (the previous screen is off-screen by now, so the
-    //     un-hide is invisible).
-    // The actual soft-handoff: reveal the real destination hero UNDER the
-    // overlay, then crossfade the overlay out.
+    // Soft handoff after the geometric flight: reveal the real dest content
+    // (blank if its <Image> is still loading) UNDER the flight view, fade the
+    // flight view out (so the user sees the dest emerge through the fade, not a
+    // hard pop), then un-hide the source so its real content is in place for the
+    // back-navigation (the previous screen is off-screen by now, so it's
+    // invisible).
     let reveal: () -> Void = { [weak dest, weak sourceView] in
       dest?.setHiddenForFlight(false)
       UIView.animate(
@@ -209,10 +198,9 @@ import UIKit
   ) {
     let duration: TimeInterval = cfg.usesSpring ? 0.32 : max(0.05, TimeInterval(cfg.duration) / 1000.0)
 
-    // UIViewPropertyAnimator does NOT animate `layer.cornerRadius`, so without
-    // an explicit CABasicAnimation the corner snaps to the end value
-    // instantly. Drive it with a CA animation that piggybacks the same
-    // duration and easing as the property animator.
+    // UIViewPropertyAnimator does NOT animate `layer.cornerRadius` — without an
+    // explicit CABasicAnimation the corner snaps to the end value instantly.
+    // Drive it with a CA animation piggybacking the animator's duration/easing.
     if initial.cornerRadius != endGeo.cornerRadius {
       let cornerAnim = CABasicAnimation(keyPath: "cornerRadius")
       cornerAnim.fromValue = initial.cornerRadius
@@ -262,9 +250,8 @@ import UIKit
     let duration: TimeInterval = max(0.05, TimeInterval(cfg.duration) / 1000.0)
     let startCenter = CGPoint(x: initial.frame.midX, y: initial.frame.midY)
     let endCenter = CGPoint(x: endGeo.frame.midX, y: endGeo.frame.midY)
-    // Material-style arc: when moving down, arc curves up-then-down; when
-    // moving up, arc curves up. The control point is the corner of the
-    // rectangle formed by the two centres, biased toward the larger of dx/dy.
+    // Material-style arc. Control point is the corner of the rectangle formed by
+    // the two centres, biased toward the larger of dx/dy.
     let dx = endCenter.x - startCenter.x
     let dy = endCenter.y - startCenter.y
     let controlPoint: CGPoint = abs(dx) > abs(dy)
@@ -301,23 +288,18 @@ import UIKit
   // MARK: - Helpers.
 
   private func geometry(of view: SharedHeroViewImpl) -> ViewGeometry {
-    // Use the SETTLED frame for the destination. During a navigation
-    // transition (e.g. a native-stack pop with parallax), the dest's screen
-    // container can have an in-progress translation transform applied. The
-    // raw `windowFrame()` would reflect that transient position and the
-    // flight would land in the wrong place. `settledWindowFrame()` resolves
-    // to where the view will land once the host's transition completes.
+    // SETTLED frame for the destination: during a transition (e.g. a parallax
+    // native-stack pop) the dest's screen container can carry an in-progress
+    // translation transform, so raw `windowFrame()` would land the flight at
+    // that transient position. `settledWindowFrame()` resolves to where the view
+    // lands once the host transition completes.
     let frame = view.settledWindowFrame()
-    // Read radius / background through the view's effective-style helpers
-    // rather than `contentView.layer.cornerRadius` directly. React applies
-    // `borderRadius` / `backgroundColor` to the Fabric host (our shim,
-    // `contentView.superview`) — reading only `contentView` here used to
-    // resolve `radius = 0` for the common
-    // `<SharedHero style={{ borderRadius: 16 }}>` pattern, which made the
-    // forward-flight overlay snap to square at t=0 (the
-    // `if initial.cornerRadius != endGeo.cornerRadius` branch below would
-    // skip the `CABasicAnimation` and `flightView.layer.cornerRadius` was
-    // already 0). See `SharedHeroViewImpl.effectiveCornerRadius()`.
+    // Read radius / background via the effective-style helpers, not
+    // `contentView.layer` directly: React applies `borderRadius` /
+    // `backgroundColor` to the shim (`contentView.superview`), so reading only
+    // `contentView` resolved `radius = 0` for the common `<SharedHero style={{
+    // borderRadius }}>` pattern, snapping the overlay square at t=0. See
+    // `SharedHeroViewImpl.effectiveCornerRadius()`.
     return ViewGeometry(
       frame: frame,
       cornerRadius: view.effectiveCornerRadius(),
@@ -376,9 +358,9 @@ import UIKit
   }
 
   private static func applyFinalFade(_ mode: String, source: UIView?, dest: UIView?) {
-    // Without a dest snapshot to fade into, fading the source out leaves the
-    // flying view invisible by the end of the flight. Keep source at full
-    // alpha and let the post-flight handoff do the smooth reveal instead.
+    // With no dest snapshot to fade into, fading the source out would leave the
+    // flying view invisible by the end. Keep source at full alpha and let the
+    // post-flight handoff do the smooth reveal.
     guard dest != nil else { return }
     switch mode {
     case "in": dest?.alpha = 1

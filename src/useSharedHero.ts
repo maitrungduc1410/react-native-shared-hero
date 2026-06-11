@@ -1,15 +1,11 @@
 import { useCallback, useState } from 'react';
 
 /**
- * Lightweight imperative helper for in-place shared-hero transitions.
+ * Imperative helper for in-place (non-navigation) shared-hero transitions.
  *
- * Returns `{ active, start, end, toggle }`. Conditionally render two
- * `<SharedHero id="x">` subtrees based on `active`; when you call `start()`
- * or `toggle()`, React unmounts one side and mounts the other and the
- * library auto-detects the match within one frame, animating the flight.
- *
- * For navigation-driven flights, you don't need this hook at all — the
- * library handles it automatically.
+ * Render two `<SharedHero id="x">` subtrees keyed on `active`; `start()`/
+ * `toggle()` swaps which side is mounted, and the library matches the two
+ * within a frame to run the flight. Navigation-driven flights need no hook.
  *
  * @example
  * ```tsx

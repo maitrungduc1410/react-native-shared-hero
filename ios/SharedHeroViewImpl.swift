@@ -14,8 +14,8 @@ import UIKit
   @objc public var easing: String = "standard"
   @objc public var motionPath: String = "linear"
   @objc public var enabled: Bool = true
-  /// When false, this hero performs a quiet teardown on unregister: it never
-  /// initiates a return/back-flight. Defaults to true (today's behaviour).
+  /// When false, unregister does a quiet teardown — no return/back-flight.
+  /// Defaults true.
   @objc public var returnFlightEnabled: Bool = true
 
   public override init() {}
@@ -38,8 +38,7 @@ public typealias SharedHeroEventEmitter = (_ id: String, _ namespace: String) ->
 
   @objc public var config: SharedHeroConfig
 
-  /// Set by the shim — invoked with `(id, namespace)` when the source view's
-  /// outbound flight starts.
+  /// Set by the shim; fires `(id, namespace)` when the source's outbound flight starts.
   @objc public var onTransitionStart: SharedHeroEventEmitter?
   /// Invoked with `(id, namespace)` when the destination view's inbound flight ends.
   @objc public var onTransitionEnd: SharedHeroEventEmitter?
@@ -78,41 +77,32 @@ public typealias SharedHeroEventEmitter = (_ id: String, _ namespace: String) ->
   @objc public func didMoveToWindow(_ window: UIWindow?) {
     heroLog(HeroLog.impl, "didMoveToWindow window=\(window != nil) view=\(ObjectIdentifier(self)) id=\(config.heroId) ns=\(config.heroNamespace) bounds=\(contentView.bounds) stashed=\(stashedSnapshot != nil)")
     if window != nil, config.enabled, !config.heroId.isEmpty {
-      // Intentionally DO NOT wipe `stashedSnapshot` here. Previously we
-      // cleared it on re-attach, but that left a window of fragility: if
-      // the very next forward flight asked for a snapshot before Fabric had
-      // committed our first layout (window is non-nil but `bounds == .zero`
-      // for one tick) `captureSnapshotRaw()` would return nil, the stash
-      // would be nil too, and `HeroRegistry.runTwinFlight` would abort with
-      // no flight. The user-visible symptom was "detail page fades in
-      // without the hero animation", repeatable after a few back-button
-      // round-trips because the symptom only manifests on the first tap
-      // after a re-attach. Keeping the most recent successful capture
-      // around as a worst-case fallback lets the flight still fire (with
-      // slightly stale source content, which is invisible during the very
-      // first frames of a flight anyway). The stash is naturally refreshed
-      // by every subsequent `captureSnapshotRaw()` call.
+      // Intentionally DO NOT wipe `stashedSnapshot` here. Clearing it on
+      // re-attach left a fragile window: if the next forward flight asked for
+      // a snapshot before Fabric committed our first layout (window non-nil but
+      // `bounds == .zero` for one tick), the live capture AND stash were both
+      // nil and `runTwinFlight` aborted with no flight ("detail fades in
+      // without the hero"). Keeping the last good capture as a fallback lets
+      // the flight fire with slightly-stale content (invisible in a flight's
+      // first frames). Refreshed by every `captureSnapshotRaw()`.
       if registeredKey == nil {
         HeroRegistry.shared.register(self)
         registeredKey = "\(config.heroNamespace)::\(config.heroId)"
       }
-      // Record the stable frame on attach too — on the INITIAL mount the
-      // sole `updateLayoutMetrics` fires before we're on-window, so the
-      // recorder scheduled there bails (window == nil) and never runs
-      // again, leaving `lastStableWindowFrame == .zero` for the first
-      // in-place toggle (which then falls back to the torn live capture
-      // and starts the flight 100pt off). Triggering here guarantees a
-      // valid stable frame is captured once we're actually on-window.
+      // Record the stable frame on attach too: on the INITIAL mount the sole
+      // `updateLayoutMetrics` fires before we're on-window, so the recorder it
+      // schedules bails (window == nil) and never re-runs, leaving
+      // `lastStableWindowFrame == .zero` for the first in-place toggle (which
+      // then uses the torn live capture and starts ~100pt off). Triggering here
+      // guarantees a valid stable frame once on-window.
       recordStableFrameSoon()
       // For a recycled in-place view, Fabric applies the NEW layout BEFORE
-      // re-attaching us to the window (the `updateLayoutMetrics` that set
-      // the new size fired while `window == nil`, so the trigger there
-      // bailed). Attaching is therefore the first on-window moment the
-      // resize is visible — give the registry a synchronous chance to
-      // detect it and hide+fly in THIS transaction, before the new state
-      // renders uncovered (the "tap → flash new size → rewind → animate"
-      // glitch). `notifyLayoutReady` no-ops unless we're being watched for
-      // an in-place resize AND the SIZE actually changed.
+      // re-attaching us (its `updateLayoutMetrics` fired while `window == nil`,
+      // so that trigger bailed). Attach is thus the first on-window moment the
+      // resize is visible: give the registry a synchronous chance to hide+fly
+      // in THIS transaction, before the new state renders uncovered (the
+      // "tap → flash new size → rewind → animate" glitch). `notifyLayoutReady`
+      // no-ops unless we're watched for an in-place resize AND the size changed.
       HeroRegistry.shared.notifyLayoutReady(self)
     } else if window == nil {
       if registeredKey != nil {
@@ -122,13 +112,11 @@ public typealias SharedHeroEventEmitter = (_ id: String, _ namespace: String) ->
     }
   }
 
-  /// Called from the shim's `willMoveToWindow:` when the view is about to be
-  /// removed from its current window. Captures and stashes the snapshot while
-  /// the view is still in the window so the back-flight has a valid source
-  /// frame even if the navigator's mount/unmount order causes us to lose the
-  /// twin-register match (e.g. the destination hero re-attaches AFTER the
-  /// source unmounts — by which point `captureSnapshot` would otherwise see
-  /// `contentView.window == nil` and return `nil`).
+  /// Called from the shim's `willMoveToWindow:` as the view leaves its window.
+  /// Stashes a snapshot while still on-window so the back-flight keeps a valid
+  /// source even when the navigator's mount/unmount order loses the twin match
+  /// (e.g. the dest re-attaches AFTER the source unmounts, by which point a
+  /// capture would see `window == nil` and return nil).
   @objc public func prepareToLeaveWindow() {
     guard config.enabled, !config.heroId.isEmpty else { return }
     if let snap = captureSnapshot() {
@@ -146,10 +134,10 @@ public typealias SharedHeroEventEmitter = (_ id: String, _ namespace: String) ->
     hiddenForFlight = false
     contentView.alpha = 1
     contentView.isHidden = false
-    // Restore the shim's alpha in case a flight was interrupted before the
-    // unhide branch in `setHiddenForFlight` ran (e.g. surface teardown
-    // mid-flight). Without this the next mount of a recycled view
-    // instance would start invisible.
+    // Restore the shim's alpha in case a flight was interrupted before
+    // `setHiddenForFlight`'s unhide branch ran (e.g. surface teardown
+    // mid-flight); otherwise the next mount of this recycled instance starts
+    // invisible.
     contentView.superview?.alpha = 1
     savedShimAlpha = 1
     stashedSnapshot = nil
@@ -157,43 +145,37 @@ public typealias SharedHeroEventEmitter = (_ id: String, _ namespace: String) ->
     lastStableSettledFrame = .zero
   }
 
-  /// Most recent window-space frame recorded while the view was stably
-  /// laid out and on-window — see `recordStableFrameSoon()`. Used as the
-  /// in-place flight's SOURCE rect. We deliberately do NOT derive this
-  /// from a live `captureSnapshotRaw()` at unregister time: during an
-  /// in-place toggle Fabric repositions the shim toward the NEW layout
-  /// (e.g. the 320pt origin) a beat before `contentView.bounds` catches
-  /// up, so a capture in that window yields a torn frame (new origin +
-  /// old size). Layout-metrics callbacks always deliver a self-consistent
-  /// frame, so recording from there avoids the tear.
+  /// Most recent window-space frame recorded while stably laid out and
+  /// on-window (see `recordStableFrameSoon()`); the in-place flight's SOURCE
+  /// rect. Deliberately NOT derived from a live capture at unregister time:
+  /// during an in-place toggle Fabric moves the shim toward the NEW layout a
+  /// beat before `contentView.bounds` catches up, so a capture there is torn
+  /// (new origin + old size). Layout-metrics callbacks deliver a self-consistent
+  /// frame, avoiding the tear.
   private(set) var lastStableWindowFrame: CGRect = .zero
   private(set) var lastStableSettledFrame: CGRect = .zero
 
   /// Called from the shim's `updateLayoutMetrics:oldLayoutMetrics:`. The
-  /// registry uses this as an event-based trigger so a queued flight starts
-  /// the instant Fabric has applied the destination's frame — much snappier
-  /// than waiting for our polling loop to converge.
+  /// registry uses it as an event-based trigger so a queued flight starts the
+  /// instant Fabric applies the dest's frame — snappier than waiting for the
+  /// poll loop to converge.
   @objc public func didUpdateLayoutMetrics() {
     HeroRegistry.shared.notifyLayoutReady(self)
     recordStableFrameSoon()
   }
 
-  /// Records `lastStableWindowFrame` on the NEXT runloop tick, after
-  /// Fabric's `layoutSubviews` has propagated the new metrics down to
-  /// `contentView` (the metrics callback fires before that, so reading
-  /// the frame synchronously here would itself be torn). Cheap: just two
-  /// `convert(_:to:)` reads, no bitmap capture, gated on the view being
-  /// on-window and not mid-flight.
+  /// Records `lastStableWindowFrame` on the NEXT runloop tick, after Fabric's
+  /// `layoutSubviews` propagates the new metrics to `contentView` (the metrics
+  /// callback fires before that, so a synchronous read would be torn). Cheap:
+  /// two `convert(_:to:)` reads, no bitmap capture, gated on being on-window.
   private func recordStableFrameSoon() {
     DispatchQueue.main.async { [weak self] in
       guard let self = self else { return }
       // Record even while `hiddenForFlight`: a hero hidden for an in-place
-      // flight is still laid out at its real (new) position — only its
-      // pixels are hidden — so `windowFrame()` is correct and we MUST
-      // capture it here, because after the flight no further
-      // `updateLayoutMetrics` may fire to refresh it before the next
-      // toggle (which would otherwise reuse the previous toggle's stale
-      // frame as the in-place source rect).
+      // flight is still laid out at its real (new) position — only its pixels
+      // are hidden — so `windowFrame()` is correct. We MUST capture it now
+      // because no further `updateLayoutMetrics` may fire before the next
+      // toggle, which would otherwise reuse the previous toggle's stale frame.
       guard self.contentView.window != nil else { return }
       let f = self.windowFrame()
       guard f != .zero else { return }
@@ -231,70 +213,48 @@ public typealias SharedHeroEventEmitter = (_ id: String, _ namespace: String) ->
 
   // MARK: - Used by FlightEngine to compute the flight rect.
 
-  /// Snapshot of this view's geometry in window coordinates. Falls back to
-  /// `.zero` if not currently in a window.
-  ///
-  /// Note: this uses `convert(_:to:)` which reflects any in-progress transform
-  /// animations on ancestor views. For the "where will this view LAND once
-  /// the host navigator's transition completes?" question (which is what the
-  /// flight engine needs for the destination), use `settledWindowFrame()`.
+  /// This view's geometry in window coordinates, or `.zero` if off-window.
+  /// Uses `convert(_:to:)`, so it REFLECTS in-progress ancestor transforms.
+  /// For "where will this view LAND once the host transition completes?" (the
+  /// flight engine's destination), use `settledWindowFrame()`.
   func windowFrame() -> CGRect {
     guard let window = contentView.window else { return .zero }
     return contentView.convert(contentView.bounds, to: window)
   }
 
-  /// The window-space frame this view will occupy once any in-progress
-  /// ancestor animations (push/pop transition transforms, modal sheet
-  /// translations, etc.) finish.
+  /// The window-space frame this view will occupy once any in-progress ancestor
+  /// animations (push/pop transforms, sheet translations, etc.) finish.
   ///
-  /// Implementation: collect every ancestor whose layer has a non-identity
-  /// transform, snap them all to identity inside a no-action
-  /// `CATransaction`, read the window frame via the standard
-  /// `convert(_:to:)`, then restore every transform — all in one runloop
-  /// tick so the screen never renders the intermediate "identity"
-  /// state.
+  /// Implementation: snap every non-identity ancestor transform to identity
+  /// inside a no-action `CATransaction`, read the frame via `convert(_:to:)`,
+  /// then restore — all in one runloop tick so the "identity" state never
+  /// renders.
   ///
-  /// Why not just walk the layer chain with `layer.position - anchor*size`?
-  /// That works for the simple case where a single ancestor (the screen
-  /// container) carries the transform, because the layer's MODEL position
-  /// is invariant to its OWN transform. But it FAILS the moment a host
-  /// navigator stack uses a chain like:
+  /// Why not walk the chain with `layer.position - anchor*size`? That works
+  /// when a single ancestor carries the transform (a layer's MODEL position is
+  /// invariant to its OWN transform), but FAILS when a wrapper ABOVE
+  /// `screenView` (window → containerView → transitionView → screenView → …,
+  /// e.g. an internal `UITransitionView`) is origin-shifted, or when stacked
+  /// transforms drive the chain. Reset-and-convert is invariant to whatever the
+  /// host does: all-identity ⇒ the visible rect IS the settled rect.
   ///
-  ///     window → containerView → transitionView → screenView → ...
-  ///
-  /// and one of the wrappers ABOVE `screenView` (e.g. an internal UIKit
-  /// `UITransitionView`) has its origin shifted as part of the animation,
-  /// or when an outer animator drives the chain with multiple stacked
-  /// transforms. The reset-and-convert path is invariant to whatever the
-  /// host does internally — if every transform is identity, the visible
-  /// rect IS the settled rect by definition.
-  ///
-  /// Symptom this is fixing: on ArcPath the back-pop's flight lands ~30%
-  /// of the screen width LEFT of the LIST's natural Visitor cell, which
-  /// matches `react-native-screens`' parallax shift on the pop's
-  /// re-entering screen. The layer-position walk above resolved to that
-  /// same shifted rect, so `pollOnce`'s `matchesHint` check fired with a
-  /// stale (parallax-shifted) hint and the flight engine drove the
-  /// overlay there instead of the natural list cell.
+  /// Symptom fixed: on ArcPath the back-pop flight landed ~30% screen-width
+  /// LEFT of the list's natural Visitor cell, matching `react-native-screens`'
+  /// parallax shift on the re-entering screen. The layer-position walk resolved
+  /// to that shifted rect, so `pollOnce`'s `matchesHint` fired on a stale hint
+  /// and drove the overlay there instead of the natural cell.
   func settledWindowFrame() -> CGRect {
     guard let window = contentView.window else { return .zero }
     let bounds = contentView.bounds
     if bounds.width <= 0 || bounds.height <= 0 { return .zero }
 
-    // Collect every ancestor LAYER (not just UIView ancestor — we walk
-    // the layer's `superlayer` chain) that currently has a non-identity
-    // model transform. We restore these as soon as we've read the rect.
-    //
-    // Walking layers, not views, is important: UIKit can insert
-    // free-standing CALayers in between (custom backing layers, the
-    // CATransformLayer used by some animator transitions, etc.) that
-    // are NOT wrapped by a UIView, and `view.superview` would skip
-    // straight past them. `react-native-screens`' simple_push animation
-    // sets the transform on the view controller's root view, but the
-    // hosting `UITransitionView`'s layer chain can resolve the
-    // transform at a different node than the one we'd reach via the
-    // view chain — we discovered this exactly via the
-    // ArcPath-push diagnostic logs.
+    // Walk the `superlayer` chain (LAYERS, not views) for non-identity model
+    // transforms, restored once we've read the rect. Layers matter: UIKit can
+    // insert free-standing CALayers (custom backing layers, the CATransformLayer
+    // some animator transitions use) that no UIView wraps, so `view.superview`
+    // would skip them. RNS's simple_push sets the transform on the VC root view,
+    // but the hosting `UITransitionView`'s layer chain can carry it at a node
+    // the view chain never reaches (found via the ArcPath-push diagnostics).
     var savedTransforms: [(CALayer, CATransform3D)] = []
     var current: CALayer? = contentView.layer
     let windowLayer = window.layer
@@ -307,17 +267,15 @@ public typealias SharedHeroEventEmitter = (_ id: String, _ namespace: String) ->
     }
 
     if savedTransforms.isEmpty {
-      // No active transforms — `convert(_:to:)` already gives the answer
-      // we want. Fast path keeps the common case (no host-navigator
-      // transition in flight) zero-cost.
+      // No active transforms — `convert(_:to:)` already gives the answer.
+      // Fast path keeps the common case (no transition in flight) zero-cost.
       return contentView.convert(bounds, to: window)
     }
 
-    // Apply identity, read, restore — all inside a no-action transaction
-    // so no implicit CAAnimation is registered and no render-server flush
-    // happens between the two `transform` writes. CoreAnimation commits
-    // the layer tree atomically at the end of the runloop tick, so the
-    // user never sees the "transforms reset" frame.
+    // Apply identity, read, restore inside a no-action transaction so no
+    // implicit CAAnimation registers and no render-server flush lands between
+    // the two `transform` writes. CoreAnimation commits the tree atomically at
+    // tick end, so the "transforms reset" frame never shows.
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     for (layer, _) in savedTransforms {
@@ -331,17 +289,14 @@ public typealias SharedHeroEventEmitter = (_ id: String, _ namespace: String) ->
     return result
   }
 
-  /// Diagnostic logger: emits ONE log line per ancestor in the layer chain
-  /// with its position / bounds / transform translation. Useful for
-  /// figuring out which container is responsible for an unexpected
-  /// `windowFrame()` value (e.g. a parallax-shifted result that
-  /// `settledWindowFrame()` should be ignoring).
+  /// Diagnostic: one log line per ancestor layer (position / bounds / transform
+  /// translation) to find which container causes an unexpected `windowFrame()`
+  /// (e.g. a parallax-shifted result `settledWindowFrame()` should ignore).
   ///
-  /// We emit one log line per ancestor rather than one big multi-line string
-  /// because the Apple System Log truncates payloads above ~1 KB, and the
-  /// chain is typically 12+ levels deep on react-native-screens — the
-  /// truncation hides exactly the upper levels where host-navigator
-  /// transforms live, defeating the whole point of dumping the chain.
+  /// One line per ancestor, not one big string: the Apple System Log truncates
+  /// above ~1 KB and the chain is 12+ levels deep on react-native-screens, so
+  /// truncation would hide exactly the upper levels where host-navigator
+  /// transforms live.
   func dumpLayerChain(prefix: String) {
     guard let window = contentView.window else {
       heroLog(HeroLog.chain, "\(prefix) view=\(ObjectIdentifier(self)) NO WINDOW")
@@ -368,30 +323,23 @@ public typealias SharedHeroEventEmitter = (_ id: String, _ namespace: String) ->
 
   // MARK: - Flight visibility.
 
-  /// Hides the in-place content while the flying overlay copy is animating so
-  /// the user doesn't see the source view sliding under the overlay. We set
-  /// both `isHidden` (the sledgehammer) and `alpha` so the React-side opacity
-  /// prop can't accidentally re-show the content mid-flight.
+  /// Hides the in-place content while the overlay copy flies, so the source
+  /// isn't seen sliding under it. Sets both `isHidden` AND `alpha` so a
+  /// React-side opacity prop can't re-show it mid-flight.
   ///
-  /// We hide BOTH `contentView` AND the shim (`contentView.superview`, our
-  /// `RCTViewComponentView` host). React's style props
-  /// (`backgroundColor`, `borderRadius`, `borderWidth`, shadow, …) all land
-  /// on the shim — `contentView` is just an empty UIView wrapper that
-  /// hosts the Fabric-mounted children. Hiding only `contentView` leaves
-  /// the shim's rounded `#eee` background drawing behind the now-empty
-  /// contentView for the entire flight, which is exactly the "gray
-  /// rounded rectangle at the source position" bug reported on
-  /// BasicImageHero. Setting `shim.alpha = 0` collapses the whole visual
-  /// for the duration of the flight; we save the original alpha so a
-  /// user-applied `<SharedHero style={{ opacity: ... }}>` survives the
-  /// flight round-trip.
+  /// Hides BOTH `contentView` AND the shim (`contentView.superview`). React's
+  /// style props (`backgroundColor`, `borderRadius`, shadow, …) land on the
+  /// shim; `contentView` is just an empty wrapper for the Fabric children.
+  /// Hiding only `contentView` leaves the shim's rounded `#eee` background
+  /// drawing behind it — the "gray rounded rectangle at the source position"
+  /// bug on BasicImageHero. `shim.alpha = 0` collapses the whole visual; we
+  /// save the original alpha so a user `style={{ opacity }}` survives the
+  /// round-trip.
   ///
-  /// Before transitioning to `hidden = true` we cache a clean snapshot —
-  /// `drawHierarchy` on an `isHidden` (or `alpha == 0`) view returns empty
-  /// pixels, so without this any flight that starts while we're still hidden
-  /// (e.g. user taps a new hero while the back-flight is still running)
-  /// would fly an invisible bitmap and the user would just see a fade with
-  /// no hero.
+  /// Caches a clean snapshot before hiding: `drawHierarchy` on a hidden /
+  /// `alpha == 0` view renders empty, so a flight that starts while we're still
+  /// hidden (tapping a new hero mid back-flight) would otherwise fly an
+  /// invisible bitmap (a fade with no hero).
   private var hiddenForFlight = false
   private var savedShimAlpha: CGFloat = 1
   func setHiddenForFlight(_ hidden: Bool) {
@@ -420,16 +368,13 @@ public typealias SharedHeroEventEmitter = (_ id: String, _ namespace: String) ->
   /// always have a usable source even when a live render would return empty.
   private var stashedSnapshot: HeroSnapshot?
 
-  /// Literal render of the view's current state. Returns `nil` if the view
-  /// has no window or zero bounds. Use `captureSnapshot()` for callers that
-  /// want the stash-aware version (which falls back to the stash when the
-  /// view is currently hidden by a concurrent flight).
+  /// Literal render of the view's current state; `nil` if off-window or zero
+  /// bounds. Use `captureSnapshot()` for the stash-aware version (falls back to
+  /// the stash when a concurrent flight has us hidden).
   ///
-  /// On success this also REFRESHES `stashedSnapshot`. The stash therefore
-  /// always reflects the most recent successful capture, which lets later
-  /// callers gracefully degrade to "previous good content" when a fresh
-  /// capture isn't possible (view briefly detached, mid-layout zero bounds,
-  /// etc.) instead of dropping the flight entirely.
+  /// On success also REFRESHES `stashedSnapshot`, so later callers can degrade
+  /// to "previous good content" when a fresh capture is impossible (briefly
+  /// detached, mid-layout zero bounds) instead of dropping the flight.
   private func captureSnapshotRaw() -> HeroSnapshot? {
     guard contentView.window != nil else { return nil }
     let frame = windowFrame()
@@ -454,33 +399,22 @@ public typealias SharedHeroEventEmitter = (_ id: String, _ namespace: String) ->
     return snap
   }
 
-  /// Resolves the corner radius that should be used to clip the flight
-  /// overlay so it visually matches the source view.
+  /// Corner radius used to clip the flight overlay so it matches the source.
   ///
-  /// React applies `borderRadius` (and `overflow: 'hidden'`) to the Fabric
-  /// host view — i.e. the Obj-C++ `SharedHeroView` shim, which is the
-  /// **superview** of `contentView`. `contentView` itself never has a
-  /// non-zero `cornerRadius` for the common usage pattern:
-  ///
-  ///     <SharedHero style={{ borderRadius: 16, overflow: 'hidden' }}>
-  ///       <Image ... />
-  ///     </SharedHero>
-  ///
-  /// The old lookup chain only inspected `contentView` and
-  /// `contentView.subviews.first` (the Fabric-mounted children), so it
-  /// resolved to 0 every time. With `initial.cornerRadius = 0`,
-  /// `FlightEngine.runLinearFlight` skipped its `CABasicAnimation`, the
-  /// `flightView` was created with `cornerRadius = 0`, and the overlay
-  /// flew as a square from t=0 — visible as "border radius removed
-  /// before the flight starts".
+  /// React applies `borderRadius` / `overflow: 'hidden'` to the Fabric host —
+  /// the `SharedHeroView` shim (superview of `contentView`) — so `contentView`
+  /// itself is never rounded for the common `<SharedHero style={{ borderRadius
+  /// }}>` pattern. The old lookup only checked `contentView` + its first child,
+  /// resolving to 0, so `runLinearFlight` skipped its `CABasicAnimation` and the
+  /// overlay flew square from t=0 ("border radius removed before the flight").
   ///
   /// Resolution order:
-  /// 1. `contentView.layer.cornerRadius` — covers anyone who explicitly
-  ///    set the radius on the impl view (rare; here for symmetry).
-  /// 2. `contentView.superview.layer.cornerRadius` — the SHIM, which is
-  ///    where the React `borderRadius` style actually lands.
-  /// 3. `contentView.subviews.first?.layer.cornerRadius` — the rare case
-  ///    where the user wraps an inner View with the radius instead.
+  /// 1. `contentView.layer.cornerRadius` — radius set directly on the impl view
+  ///    (rare; for symmetry).
+  /// 2. `contentView.superview.layer.cornerRadius` — the SHIM, where React's
+  ///    `borderRadius` actually lands.
+  /// 3. `contentView.subviews.first?.layer.cornerRadius` — user wrapped an inner
+  ///    View with the radius instead.
   @objc public func effectiveCornerRadius() -> CGFloat {
     let direct = contentView.layer.cornerRadius
     if direct > 0 { return direct }
@@ -495,9 +429,9 @@ public typealias SharedHeroEventEmitter = (_ id: String, _ namespace: String) ->
   }
 
   /// Mirror of `effectiveCornerRadius()` for `backgroundColor`, used by
-  /// morph-mode flights to crossfade the source's background tint into
-  /// the destination's. Same rationale: `<SharedHero style={{
-  /// backgroundColor: ... }}>` lands on the shim, not on `contentView`.
+  /// morph-mode flights to crossfade source tint into dest. Same rationale:
+  /// `<SharedHero style={{ backgroundColor }}>` lands on the shim, not
+  /// `contentView`.
   @objc public func effectiveBackgroundColor() -> UIColor {
     if let bg = contentView.backgroundColor, bg.cgColor.alpha > 0 {
       return bg
@@ -511,22 +445,18 @@ public typealias SharedHeroEventEmitter = (_ id: String, _ namespace: String) ->
     return .clear
   }
 
-  /// Captures the current snapshot of this view's content for use as the
-  /// source of a flight.
+  /// Snapshot of this view's content for use as a flight source.
   ///
   /// Resolution order:
-  /// 1. If the view is currently hidden by another flight, return the pre-
-  ///    hide stash — `drawHierarchy` on a hidden view renders empty pixels.
-  /// 2. Try a fresh render via `captureSnapshotRaw()`.
-  /// 3. Fall back to `stashedSnapshot` (the most recent successful capture)
-  ///    if the live render couldn't produce one. This is the safety net
-  ///    that catches the "no flight at all" regression after several
-  ///    back-button cycles: when `runTwinFlight` asked for a snapshot the
-  ///    instant a list-screen hero had been re-attached but Fabric hadn't
-  ///    committed its layout yet, the live render returned nil. Without
-  ///    this fallback the entire forward flight would silently drop and
-  ///    the user just saw the screen fade. With it, we fly the previous
-  ///    known content (correct position and bitmap; only a few ms stale).
+  /// 1. If hidden by another flight, return the pre-hide stash —
+  ///    `drawHierarchy` on a hidden view renders empty.
+  /// 2. A fresh render via `captureSnapshotRaw()`.
+  /// 3. Fall back to `stashedSnapshot` if the live render failed. Safety net for
+  ///    the "no flight at all" regression: when `runTwinFlight` asked the instant
+  ///    a re-attached list hero hadn't committed layout, the live render returned
+  ///    nil and the whole forward flight dropped (screen just faded). The stash
+  ///    flies the last known content instead (right position/bitmap, a few ms
+  ///    stale).
   func captureSnapshot() -> HeroSnapshot? {
     if hiddenForFlight, let stash = stashedSnapshot {
       return stash
@@ -553,20 +483,16 @@ public typealias SharedHeroEventEmitter = (_ id: String, _ namespace: String) ->
 
 /// Immutable capture of a `SharedHeroViewImpl`'s appearance and geometry.
 ///
-/// `frame` is the live window-space rect (via `convert(_:to:window)`), which
-/// REFLECTS any in-progress transforms on this view's ancestors — used as the
-/// flight's START rect so a back-flight after a drag-to-dismiss starts at the
-/// dragged position, not the natural layout position.
+/// `frame` is the LIVE window rect (reflects in-progress ancestor transforms):
+/// the flight's START rect, so a back-flight after a drag-to-dismiss starts at
+/// the dragged position, not the natural one.
 ///
-/// `settledFrame` is the window-space rect WITHOUT ancestor transforms
-/// (via `settledWindowFrame()`) — used by the registry's `destFrameHint`
-/// cache so a future push can land at the natural layout position, not the
-/// previous pop's transformed position. Without this split the
-/// "drag down to dismiss, then tap the same hero again" path stashed the
-/// dragged rect as the cached hint and pollOnce would either land the next
-/// forward flight at the wrong rect or wait out its 2 s timeout (the
-/// destination stays invisible the whole time, which the user perceives as
-/// "drag stopped working / detail is blank").
+/// `settledFrame` is the window rect WITHOUT ancestor transforms (via
+/// `settledWindowFrame()`): the registry's `destFrameHint` cache, so a future
+/// push lands at the natural position, not the previous pop's transformed one.
+/// Without the split, "drag to dismiss, then re-tap" cached the dragged rect as
+/// the hint and pollOnce landed the next flight wrong or waited out its 2 s
+/// timeout (dest invisible throughout — "drag stopped working / detail blank").
 struct HeroSnapshot {
   let image: UIImage?
   let frame: CGRect

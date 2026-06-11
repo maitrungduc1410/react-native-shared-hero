@@ -84,13 +84,11 @@ using namespace facebook::react;
   [_impl didMoveToWindow:self.window];
 }
 
-// Fabric's default RCTViewComponentView mounts children directly into `self`,
-// which means they would NOT live inside `_impl.contentView` — and our
-// `setHiddenForFlight` (which toggles `contentView.isHidden`) plus our
-// `captureSnapshot` (which renders `contentView`) would both operate on an
-// empty container. Routing mounts through `_impl.contentView` makes the
-// React child the actual hero content, so hiding it / snapshotting it
-// produces the expected result.
+// Fabric's default RCTViewComponentView mounts children into `self`, not
+// `_impl.contentView` — so `setHiddenForFlight` (toggles `contentView.isHidden`)
+// and `captureSnapshot` (renders `contentView`) would both operate on an empty
+// container. Routing mounts through `_impl.contentView` makes the React child
+// the actual hero content.
 - (void)mountChildComponentView:(UIView<RCTComponentViewProtocol> *)childComponentView
                           index:(NSInteger)index
 {

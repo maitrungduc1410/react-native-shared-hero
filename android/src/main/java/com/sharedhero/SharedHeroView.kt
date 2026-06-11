@@ -13,16 +13,14 @@ import com.facebook.react.views.view.ReactViewGroup
 /**
  * Fabric host view for a shared-hero element.
  *
- * Extends [ReactViewGroup] (rather than plain `ViewGroup`) so that all
- * standard React Native view-style props — `borderRadius`, `overflow`,
- * `borderColor`, `borderWidth`, `backgroundColor`, etc. — flow into the
- * usual `BackgroundStyleApplicator` machinery and actually render. Without
- * this, a `<SharedHero style={{ borderRadius: 16, overflow: 'hidden' }}>`
- * would silently render square corners on Android while iOS works fine.
+ * Extends [ReactViewGroup] (not plain `ViewGroup`) so standard RN view-style
+ * props — `borderRadius`, `overflow`, `borderColor`, `borderWidth`,
+ * `backgroundColor`, etc. — flow into `BackgroundStyleApplicator` and actually
+ * render; otherwise `<SharedHero style={{ borderRadius: 16, overflow:
+ * 'hidden' }}>` silently renders square corners on Android while iOS works.
  *
- * Child layout is left to Fabric / Yoga via the normal `setFrame` /
- * `layout` mounting path that `ReactViewGroup` already supports; no
- * `onMeasure` / `onLayout` overrides needed.
+ * Child layout is left to Fabric/Yoga via `ReactViewGroup`'s normal
+ * `setFrame`/`layout` path; no `onMeasure`/`onLayout` overrides needed.
  */
 class SharedHeroView(context: Context?) : ReactViewGroup(context) {
   private companion object {
@@ -33,18 +31,17 @@ class SharedHeroView(context: Context?) : ReactViewGroup(context) {
   val config = SharedHeroConfig()
 
   /**
-   * Border radius applied via the manager's `@ReactProp` setter, in
-   * **physical pixels**. Mirrors what `BackgroundStyleApplicator` is
-   * configured with and is read back by the flight engine so the overlay
-   * can interpolate corner radius source→dest.
+   * Border radius (in **physical pixels**) mirrored from the manager's
+   * `@ReactProp` setter. Read back by the flight engine to interpolate the
+   * overlay's corner radius source→dest.
    */
   var cornerRadiusPx: Float = 0f
     internal set
 
   /**
-   * Background color applied via the manager's `@ReactProp` setter. Read
-   * back during morph-mode flights so the overlay can crossfade between
-   * source and destination background tints.
+   * Background color mirrored from the manager's `@ReactProp` setter. Read back
+   * during morph-mode flights to crossfade the overlay between source and dest
+   * background tints.
    */
   var backgroundColorInt: Int = Color.TRANSPARENT
     internal set
@@ -58,9 +55,9 @@ class SharedHeroView(context: Context?) : ReactViewGroup(context) {
    */
   override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
     super.onSizeChanged(w, h, oldw, oldh)
-    // Tell the registry as soon as we have non-zero geometry so any
-    // pending flight whose destination is THIS view can fire on the next
-    // frame instead of polling until layout lands.
+    // Notify the registry the moment we have non-zero geometry so a pending
+    // flight whose destination is THIS view fires next frame instead of polling
+    // until layout lands.
     if (w > 0 && h > 0) {
       HeroRegistry.notifyLayoutReady(this)
     }
@@ -68,7 +65,7 @@ class SharedHeroView(context: Context?) : ReactViewGroup(context) {
 
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
-    // Re-attaching means any previously-stashed snapshot is stale.
+    // Re-attaching: any previously-stashed snapshot is stale.
     stashedSnapshot = null
     hasGoodStash = false
     detaching = false
@@ -77,19 +74,17 @@ class SharedHeroView(context: Context?) : ReactViewGroup(context) {
 
   override fun onDetachedFromWindow() {
     // Mark detaching BEFORE unregister so the registry's
-    // `captureOrCachedSnapshot()` returns the rolling stash captured in
-    // [dispatchDraw] (while the view was still drawing real content) rather
-    // than re-rendering the now-detached view.
+    // `captureOrCachedSnapshot()` returns the [dispatchDraw] rolling stash
+    // (captured while the view still drew real content) instead of re-rendering
+    // the now-detached view.
     //
-    // Why this matters: a `ViewGroup` detaches its CHILDREN FIRST, and React
-    // Native's `<Image>` (Fresco) releases its drawable in its own
-    // `onDetachedFromWindow`. So by the time we get here the child image is
-    // already gone and a fresh `draw(Canvas)` would be BLANK. That blank
-    // capture is what broke the in-place toggle: the source hero unmounts in
-    // the SAME runloop tick the destination mounts, so the registry has no
-    // live source to capture and falls back to our snapshot — a blank one made
-    // the flight fly an invisible bitmap ("goes blank") with the real image
-    // only appearing at the end ("snap").
+    // Why: a `ViewGroup` detaches its CHILDREN first, and RN's `<Image>`
+    // (Fresco) releases its drawable in its own `onDetachedFromWindow`, so by
+    // now the child image is gone and a fresh `draw(Canvas)` is BLANK. That
+    // blank capture broke the in-place toggle: the source unmounts in the SAME
+    // tick the dest mounts, so the registry has no live source and falls back
+    // to our snapshot — a blank one flew an invisible bitmap ("goes blank")
+    // with the real image only appearing at the end ("snap").
     detaching = true
     if (registered) {
       HeroRegistry.unregister(this)
@@ -101,20 +96,19 @@ class SharedHeroView(context: Context?) : ReactViewGroup(context) {
   /**
    * Keep a rolling, always-fresh snapshot of the hero's visible content.
    *
-   * `dispatchDraw` fires whenever the view actually (re)draws — notably when a
-   * remote `<Image>` finishes loading and fades in — so capturing here means we
-   * always hold a real bitmap from while the children were attached and
-   * drawable. This is the fallback the registry uses for in-place toggles and
-   * for any navigator that unmounts the source before the destination
-   * re-attaches.
+   * `dispatchDraw` fires whenever the view (re)draws — notably when a remote
+   * `<Image>` finishes loading and fades in — so we always hold a real bitmap
+   * from while the children were attached and drawable. This is the fallback
+   * the registry uses for in-place toggles and for any navigator that unmounts
+   * the source before the dest re-attaches.
    *
-   * - The `capturing` reentrancy guard is essential: [captureSnapshotRaw]
-   *   itself calls `draw(Canvas)`, which re-enters `dispatchDraw`; without the
-   *   guard that would recurse infinitely.
-   * - Throttled so scrolling lists of heroes don't allocate a bitmap every
-   *   frame; a slightly stale fallback position is harmless (navigation
-   *   flights capture the source live while it's attached).
-   * - Skipped while hidden for a flight (the content is alpha=0 → transparent).
+   * - The `capturing` reentrancy guard is essential: [captureSnapshotRaw] calls
+   *   `draw(Canvas)`, which re-enters `dispatchDraw` — infinite recursion
+   *   without it.
+   * - Throttled so scrolling lists don't allocate a bitmap every frame; a
+   *   slightly stale fallback is harmless (navigation flights capture the
+   *   source live while attached).
+   * - Skipped while hidden for a flight (content is alpha=0 → transparent).
    */
   override fun dispatchDraw(canvas: Canvas) {
     super.dispatchDraw(canvas)
@@ -122,24 +116,23 @@ class SharedHeroView(context: Context?) : ReactViewGroup(context) {
     if (!registered || !config.enabled || config.heroId.isEmpty()) return
     if (width <= 0 || height <= 0) return
     val now = System.currentTimeMillis()
-    // Throttle ONLY once we already hold a good (non-blank) stash — that's the
-    // common scrolling-list case the throttle exists for. Until we have one,
-    // attempt a capture on every draw: a remote `<Image>` paints into the view
-    // a few frames AFTER first layout, and the draw triggered by that paint is
-    // often the ONLY one before the view goes static, so a throttle here would
-    // miss it. (Draws naturally stop once content is static, so this can't spin
-    // — there's nothing to invalidate us.)
+    // Throttle ONLY once we hold a good (non-blank) stash — the common
+    // scrolling-list case the throttle exists for. Until then, capture on every
+    // draw: a remote `<Image>` paints a few frames AFTER first layout, and that
+    // paint's draw is often the ONLY one before the view goes static, so a
+    // throttle here would miss it. (Draws stop once content is static, so this
+    // can't spin.)
     //
-    // This is the cold-launch fix: the old code stored the FIRST capture
-    // (image not yet painted → fully transparent), advanced the throttle, and
-    // never refreshed — so the very first in-place toggle flew a blank source.
+    // The cold-launch fix: the old code stored the FIRST capture (image not yet
+    // painted → transparent), advanced the throttle, and never refreshed — so
+    // the very first in-place toggle flew a blank source.
     if (hasGoodStash && now - lastStashAt < STASH_THROTTLE_MS) return
     capturing = true
     try {
       captureSnapshotRaw()?.let {
-        // Promote ONLY a non-blank render to the stash. A blank (fully
-        // transparent) capture means the child `<Image>` hasn't painted yet;
-        // keep the previous stash (or null) and retry on the next draw.
+        // Promote ONLY a non-blank render. A blank (transparent) capture means
+        // the child `<Image>` hasn't painted yet; keep the previous stash (or
+        // null) and retry next draw.
         if (it.bitmap != null && !isLikelyBlankBitmap(it.bitmap)) {
           stashedSnapshot = it
           lastStashAt = now
@@ -157,20 +150,17 @@ class SharedHeroView(context: Context?) : ReactViewGroup(context) {
   }
 
   /**
-   * Reset every piece of mutable hero state to defaults so this view
-   * instance is safe to reuse in a fresh logical mount. Called from the
-   * manager's [SharedHeroViewManager.prepareToRecycleView] and
-   * [SharedHeroViewManager.onDropViewInstance] as a defensive belt-and-
-   * braces measure.
+   * Reset all mutable hero state to defaults so this instance is safe to reuse
+   * in a fresh logical mount. Called defensively from the manager's
+   * [SharedHeroViewManager.prepareToRecycleView] and
+   * [SharedHeroViewManager.onDropViewInstance].
    *
-   * Today our manager doesn't actively opt into Fabric view recycling
-   * (`setupViewRecycling` is not called) so `prepareToRecycleView` is
-   * effectively never invoked by the mounting layer — but if recycling
-   * is ever enabled, stale `hiddenForFlight` / `stashedSnapshot` / stale
-   * `config` carried across reuses would make a freshly-mounted hero
-   * start invisible, fly an old bitmap, or land at the wrong settled
-   * geometry. Resetting here keeps the view-side state in sync with the
-   * registry-side cleanup we already do in `HeroRegistry.register`.
+   * We don't opt into Fabric view recycling today (`setupViewRecycling` is
+   * never called), so `prepareToRecycleView` is effectively never invoked — but
+   * if recycling is ever enabled, stale `hiddenForFlight` / `stashedSnapshot` /
+   * `config` carried across reuses would make a fresh hero start invisible, fly
+   * an old bitmap, or land at the wrong settled geometry. Mirrors the
+   * registry-side cleanup in `HeroRegistry.register`.
    */
   fun resetHeroState() {
     if (registered) {
@@ -213,15 +203,13 @@ class SharedHeroView(context: Context?) : ReactViewGroup(context) {
   }
 
   /**
-   * Set when this view's content is being shown by a flight in the overlay.
-   * We hide the in-place content so the user only sees the flying snapshot.
+   * Set when this view's content is being shown by a flight in the overlay; we
+   * hide the in-place content so only the flying snapshot is visible.
    *
-   * Before transitioning to `hidden = true` we cache a clean snapshot — a
-   * later `draw(Canvas)` on a view with `alpha = 0` produces a transparent
-   * bitmap, so without this any flight that starts while we're still hidden
-   * (e.g. user taps a new hero while the back-flight is still running)
-   * would fly an invisible bitmap and the user would just see a fade with
-   * no hero.
+   * Before `hidden = true` we cache a clean snapshot — a later `draw(Canvas)`
+   * on an `alpha = 0` view is transparent, so without this a flight starting
+   * while we're still hidden (e.g. tapping a new hero mid back-flight) would
+   * fly an invisible bitmap and the user would see a fade with no hero.
    */
   private var hiddenForFlight = false
 
@@ -236,22 +224,19 @@ class SharedHeroView(context: Context?) : ReactViewGroup(context) {
       }
     }
     hiddenForFlight = hidden
-    // Use both INVISIBLE and alpha so neither a parent fade animation nor a
-    // React-side opacity prop can re-show the in-place content while the
-    // overlay copy is flying.
+    // Use both INVISIBLE and alpha so neither a parent fade nor a React-side
+    // opacity prop can re-show the in-place content while the overlay flies.
     visibility = if (hidden) INVISIBLE else VISIBLE
     alpha = if (hidden) 0f else 1f
     if (!hidden) {
-      // We've just been REVEALED after a flight. A view that was a flight's
-      // DESTINATION (e.g. the large/small box in the InPlaceToggle example)
-      // is `setHiddenForFlight(true)` from the instant it registers — before
-      // its very first draw — and stays hidden for the whole flight, so
-      // `dispatchDraw` never captures a rolling stash for it. Unless we force
-      // one now, this view becomes the SOURCE of the NEXT toggle with a null
-      // or blank stash, and the next flight flies an invisible bitmap →
-      // "blank for a frame then snaps" on every toggle after the first.
-      //
-      // So eagerly refresh the rolling stash from a guaranteed-visible render.
+      // Just REVEALED after a flight. A flight DESTINATION (e.g. the large/small
+      // box in InPlaceToggle) is hidden from the instant it registers — before
+      // its first draw — and stays hidden the whole flight, so `dispatchDraw`
+      // never captured a rolling stash for it. Without forcing one now, this
+      // view becomes the SOURCE of the NEXT toggle with a null/blank stash and
+      // the next flight flies an invisible bitmap → "blank for a frame then
+      // snaps" on every toggle after the first. So eagerly refresh from a
+      // guaranteed-visible render.
       refreshStashSoon()
     }
     android.util.Log.d(
@@ -264,21 +249,18 @@ class SharedHeroView(context: Context?) : ReactViewGroup(context) {
    * Force the rolling stash to refresh from a real, on-window render so this
    * view is a valid flight SOURCE for the next in-place toggle.
    *
-   * Why this is needed even though [dispatchDraw] already maintains a rolling
-   * stash:
-   * - The destination of an in-place flight is hidden for its whole formative
-   *   life, so [dispatchDraw] never captured anything for it.
+   * Needed even though [dispatchDraw] maintains a rolling stash, because:
+   * - An in-place flight's destination is hidden for its whole formative life,
+   *   so [dispatchDraw] never captured anything for it.
    * - Once revealed, static image content may produce only a single draw, and
-   *   the [STASH_THROTTLE_MS] throttle can lock in a blank/incomplete first
-   *   capture (e.g. captured a tick before the child `<Image>` re-composites)
-   *   while skipping the good one. There's also no guarantee `dispatchDraw`
-   *   re-fires at all for unchanging content after the reveal.
+   *   the [STASH_THROTTLE_MS] throttle can lock in a blank/incomplete capture
+   *   (taken a tick before the child `<Image>` re-composites) while skipping the
+   *   good one — and `dispatchDraw` may not re-fire at all for static content.
    *
-   * We therefore reset the throttle and post a couple of forced captures: one
-   * on the next frame (after the revealed content has drawn) and one after the
-   * throttle window, so at least one lands on a fully-composited frame. We do
-   * NOT null the existing stash here — keeping the last good one as a fallback
-   * is strictly better than a null in case a re-toggle races the posts.
+   * So reset the throttle and post two forced captures: one next frame (after
+   * the revealed content draws) and one past the throttle window, so at least
+   * one lands on a fully-composited frame. We do NOT null the existing stash —
+   * keeping the last good one beats a null if a re-toggle races the posts.
    */
   private fun refreshStashSoon() {
     lastStashAt = 0L
@@ -290,8 +272,7 @@ class SharedHeroView(context: Context?) : ReactViewGroup(context) {
   /**
    * Capture a fresh stash on a posted frame, bypassing the [dispatchDraw]
    * throttle. Stores only a non-blank bitmap from an attached, visible,
-   * laid-out, non-hidden view so we never overwrite a good stash with a
-   * transparent render.
+   * laid-out, non-hidden view so we never overwrite a good stash with blank.
    */
   private fun postCaptureStash() {
     post {
@@ -379,23 +360,19 @@ class SharedHeroView(context: Context?) : ReactViewGroup(context) {
   }
 
   /**
-   * Literal render of the view's current state. Used internally by
-   * `setHiddenForFlight` (to stash before hiding) and by `captureSnapshot`
-   * for the un-hidden path. Returns `null` if the view has no measured
-   * dimensions.
+   * Literal render of the view's current state. Used by `setHiddenForFlight`
+   * (to stash before hiding) and `captureSnapshot`'s un-hidden path. `null` if
+   * the view has no measured dimensions.
    *
-   * Renders the content WITHOUT the rounded `overflow: hidden` corner clip
-   * that `ReactViewGroup.dispatchDraw` would otherwise bake into the bitmap.
-   * Why: a source captured WITH its corners rounded carries that rounding as
-   * a fixed proportion of its own (small) size. Scaled up to the destination
-   * during a flight, the baked rounding becomes proportionally LARGER than the
-   * destination's actual corner radius, so the flight overlay's corners look
-   * rounder than the destination the whole way and visibly "pop" sharper at
-   * handoff. By capturing SQUARE content and letting the flight overlay be the
-   * sole source of corner rounding (interpolated source→dest, matching the
-   * destination exactly at completion), there's no pop — mirroring how iOS's
-   * `flightView.layer.cornerRadius` owns the rounding while the image subview
-   * is an unrounded aspect-fill.
+   * Renders WITHOUT the rounded `overflow: hidden` clip that
+   * `ReactViewGroup.dispatchDraw` would bake into the bitmap. Why: a source
+   * captured WITH rounded corners carries that rounding as a fixed proportion
+   * of its own (small) size; scaled up to the dest it becomes proportionally
+   * LARGER than the dest's radius, so the overlay looks rounder the whole way
+   * and "pops" sharper at handoff. Capturing SQUARE content and letting the
+   * overlay own all rounding (interpolated source→dest, exact at completion)
+   * removes the pop — mirroring iOS where `flightView.layer.cornerRadius` owns
+   * rounding while the image subview is an unrounded aspect-fill.
    */
   private fun captureSnapshotRaw(): HeroSnapshot? {
     if (width <= 0 || height <= 0) return null
@@ -415,14 +392,12 @@ class SharedHeroView(context: Context?) : ReactViewGroup(context) {
   }
 
   /**
-   * Draw this hero's children onto [canvas] at their laid-out positions
-   * WITHOUT going through `dispatchDraw` (which applies the rounded
-   * `overflow: hidden` clip). The flight overlay supplies the corner rounding
-   * instead — see [captureSnapshotRaw].
+   * Draw this hero's children onto [canvas] at their laid-out positions WITHOUT
+   * `dispatchDraw`'s rounded `overflow: hidden` clip; the overlay supplies the
+   * rounding instead — see [captureSnapshotRaw].
    *
-   * Falls back to a normal `draw` when there are no children (nothing to draw
-   * unclipped — e.g. a background-only hero), in which case there's no child
-   * content whose corners could pop anyway.
+   * Falls back to a normal `draw` when there are no children (e.g. a
+   * background-only hero), where no child corners could pop anyway.
    */
   private fun drawContentUnclipped(canvas: Canvas) {
     if (childCount == 0) {

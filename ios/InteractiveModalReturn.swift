@@ -8,55 +8,49 @@ import UIKit
 ///
 /// ## Why this exists
 ///
-/// A button dismiss works through the normal registry back-flight because
-/// React-Navigation's `goBack()` unmounts the modal screen at the START of the
-/// dismiss, so the flight overlaps the slide. A SWIPE dismiss is the opposite:
-/// UIKit drives the sheet interactively and React-Navigation only unmounts the
-/// screen AFTER the dismiss fully completes — by then the list is already
-/// revealed and any flight we start is hopelessly late. We can't hook UIKit's
+/// A button dismiss rides the normal registry back-flight: `goBack()` unmounts
+/// the modal at the START of the dismiss, so the flight overlaps the slide. A
+/// SWIPE dismiss is the opposite — UIKit drives the sheet interactively and RNS
+/// only unmounts AFTER the dismiss completes, by which point the list is
+/// revealed and any flight is hopelessly late. We can't hook UIKit's
 /// interactive sheet transition (RNS owns the presentation controller), so we
-/// instead OBSERVE the sheet's real motion and drive our own overlay copy.
+/// OBSERVE the sheet's real motion and drive our own overlay copy.
 ///
 /// ## Mechanism (no prediction, always in sync with the real sheet)
 ///
-/// While a sheet-hosted detail hero is on-window we run a `CADisplayLink` that
-/// reads the hero's LIVE window position each frame. We capture its resting
-/// ("natural") window position once the present animation settles, then:
+/// While a sheet-hosted detail hero is on-window a `CADisplayLink` reads its
+/// LIVE window position each frame. Capture the resting ("natural") position
+/// once the present animation settles, then:
 ///
-///   * `translation = live.minY - natural.minY` is exactly how far the sheet
-///     has been dragged down (works whether UIKit moves the sheet by transform
-///     or by frame — we only ever read `windowFrame()`).
-///   * Once a downward drag is detected we hide the real hero + the list
-///     thumbnail and add an overlay snapshot. Each frame we move the overlay
-///     from `natural + translation` (it tracks the finger, so it stays over the
-///     real hero and the empty-card "hole" is mostly covered) toward the list
-///     thumbnail as the dismiss progresses.
-///   * If the hero leaves the window (sheet committed to dismiss) we land the
-///     overlay on the thumbnail and hand off to the real list hero. If the
-///     sheet returns to rest (drag cancelled) we restore the hero. The release
-///     decision is UIKit's — we just follow whatever the sheet actually does.
+///   * `translation = live.minY - natural.minY` is how far the sheet dragged
+///     down (works whether UIKit moves it by transform or frame — we only read
+///     `windowFrame()`).
+///   * On a downward drag, hide the real hero + list thumbnail and add an
+///     overlay snapshot, lerped each frame from `natural + translation` (finger-
+///     tracking, so it stays over the real hero and covers the empty-card hole)
+///     toward the list thumbnail as the dismiss progresses.
+///   * Hero leaves the window (committed) ⇒ land on the thumbnail and hand off
+///     to the real list hero. Sheet returns to rest (cancelled) ⇒ restore. The
+///     commit/cancel decision is UIKit's; we just follow it.
 ///
 /// ## Known limitation
 ///
 /// The native sheet card still slides as a unit, so the hero is visually
-/// "peeled" out of it. The finger-tracking mapping keeps the overlay over the
-/// real hero for most of the drag, minimising the visible gap, but it can't be
-/// fully eliminated without owning the sheet's transition controller.
+/// "peeled" out of it. Finger-tracking minimises the visible gap but can't
+/// eliminate it without owning the sheet's transition controller.
 @objc public final class InteractiveModalReturn: NSObject {
   @objc public static let shared = InteractiveModalReturn()
   private override init() { super.init() }
 
   // MARK: - Tunables.
 
-  /// Frames of <0.5pt position change before we treat the present animation as
-  /// settled and capture the hero's natural resting frame.
+  /// Frames of <0.5pt position change before the present animation counts as
+  /// settled (and we capture the natural resting frame).
   private static let settleStableFrames = 3
-  /// Downward translation (points) that arms the interactive overlay. Small so
-  /// the hero starts tracking almost immediately, but non-zero so layout
-  /// jitter doesn't trigger it.
+  /// Downward drag (pt) that arms the overlay. Small for near-instant tracking,
+  /// non-zero so layout jitter can't trip it.
   private static let activateThreshold: CGFloat = 6
-  /// Translation at/below which an active drag is considered cancelled (sheet
-  /// returned to rest).
+  /// Translation at/below which an active drag counts as cancelled (back at rest).
   private static let cancelThreshold: CGFloat = 2
 
   // MARK: - Session state.
@@ -69,9 +63,8 @@ import UIKit
   private var ready = false
   /// A downward drag is in progress and the overlay is live.
   private var active = false
-  /// The synced finish/cancel completion animation is running. While set the
-  /// display link must not fight it (the model frame has jumped to its final
-  /// value already).
+  /// The synced finish/cancel animation is running; while set the display link
+  /// must stand down (the model frame has jumped to its final value).
   private var finishing = false
 
   private var overlay: UIView?
@@ -86,23 +79,21 @@ import UIKit
   private var lastY: CGFloat = .greatestFiniteMagnitude
   private var stableFrames = 0
 
-  /// The tracked hero has attached to a window at least once. Until then a
-  /// `window == nil` reading just means the modal is still presenting (its
-  /// content is off-window during the present animation) — NOT a dismiss.
+  /// The tracked hero has attached to a window at least once. Before that, a
+  /// `window == nil` reading just means the modal is still presenting (content
+  /// off-window during the present animation) — NOT a dismiss.
   private var everAttached = false
-  /// Wall-clock deadline for the first attach, so a flight that is queued for a
-  /// destination that never attaches (e.g. aborted) doesn't leave the link
-  /// running forever.
+  /// Deadline for the first attach, so a flight queued for a destination that
+  /// never attaches (e.g. aborted) doesn't leave the link spinning forever.
   private var attachDeadline: CFTimeInterval = 0
   private static let maxAttachWaitSeconds: CFTimeInterval = 8
 
   // MARK: - Arming (called from HeroRegistry.runTwinFlight).
 
-  /// Arm interactive tracking for a freshly-pushed `detail` hero whose return
-  /// destination is `twin` (the source/list hero). Cheap to call for every
-  /// twin flight: if the detail turns out NOT to be inside a swipe-dismissable
-  /// sheet (e.g. a plain native-stack push) we stand down as soon as it
-  /// settles on-window.
+  /// Arm interactive tracking for a freshly-pushed `detail` whose return
+  /// destination is `twin` (the list hero). Cheap to call for every twin
+  /// flight: if the detail isn't inside a swipe-dismissable sheet (e.g. a plain
+  /// native-stack push) we stand down as soon as it settles on-window.
   func arm(detail: SharedHeroViewImpl, twin: SharedHeroViewImpl) {
     // Tear down any previous (un-finalised) session without reversing it.
     disarm()
@@ -133,17 +124,15 @@ import UIKit
   }
 
   @objc private func tick() {
-    // The synced finish/cancel animation owns everything now — don't let the
-    // display link fight it (the model frame has jumped to its final value).
+    // Synced finish owns everything now; don't let the link fight it (the model
+    // frame has jumped to its final value).
     if finishing { return }
 
     guard let detail = detail else { disarm(); return }
 
-    // Hero off-window. Two very different cases:
-    //   * Before the first attach → the modal is still presenting (its content
-    //     is off-window during the present animation). Keep waiting, bounded by
-    //     `attachDeadline` so an aborted/never-attached flight doesn't spin.
-    //   * After having been attached → the modal finished dismissing.
+    // Off-window: before first attach the modal is still presenting (content
+    // off-window during the present animation) — wait, bounded by
+    // `attachDeadline`; after having attached, the modal finished dismissing.
     guard detail.contentView.window != nil else {
       if everAttached {
         if active {
@@ -164,8 +153,8 @@ import UIKit
     guard live != .zero else { return }
 
     if !ready {
-      // Wait for the present animation to settle before sampling a natural
-      // resting frame. Detect settle as "vertical position stopped moving".
+      // Sample the natural resting frame once the present animation settles,
+      // i.e. once the vertical position stops moving.
       if abs(live.minY - lastY) < 0.5 {
         stableFrames += 1
         if stableFrames >= Self.settleStableFrames {
@@ -187,14 +176,12 @@ import UIKit
 
     let tc = Self.sheetTransitionCoordinator(detail.contentView)
 
-    // RELEASE DETECTION. Once the user lifts their finger the sheet's
-    // interactive dismissal stops being interactive and UIKit animates the
-    // completion by snapping the layer's MODEL value to its final state and
-    // animating only the PRESENTATION layer. `windowFrame()` is model-based, so
-    // it has just jumped to the end — stop finger-tracking and run our overlay
-    // animation SYNCED to UIKit's completion (same duration + curve) so the
-    // hero lands exactly as the sheet finishes sliding off (commit) or returns
-    // smoothly to rest (cancel) instead of snapping.
+    // RELEASE DETECTION. On finger-lift the dismissal stops being interactive:
+    // UIKit snaps the layer's MODEL value to its final state and animates only
+    // the presentation layer. `windowFrame()` is model-based, so it has jumped
+    // to the end — stop finger-tracking and run the overlay SYNCED to UIKit's
+    // completion (same duration + curve) so the hero lands with the sheet
+    // sliding off (commit) or returns to rest (cancel) instead of snapping.
     if active, let tc = tc, !tc.isInteractive {
       beginSyncedFinish(
         cancelled: tc.isCancelled,
@@ -213,9 +200,8 @@ import UIKit
       return
     }
 
-    // FALLBACK cancel detection only when there's no transition coordinator to
-    // observe (we can't sync to UIKit, so just restore at rest). With a
-    // coordinator the release-detection branch above handles cancel in sync.
+    // FALLBACK cancel detection when there's no coordinator to sync to —
+    // just restore at rest. With one, the release branch above handles cancel.
     if tc == nil, translation <= Self.cancelThreshold {
       finalizeCancel()
       return
@@ -233,11 +219,11 @@ import UIKit
     // Capture the source snapshot BEFORE hiding the hero.
     let snap = detail.captureSnapshot()
 
-    // Destination = the list thumbnail. It sits behind the sheet in the same
-    // window, but iOS recedes/scales the presenter under a pageSheet, so its
-    // LIVE `windowFrame()` is transform-distorted. Use `settledWindowFrame()`
-    // (ancestor transforms reset) to get the resting position the thumbnail
-    // will occupy once the presenter scales back to identity on dismiss.
+    // Destination = the list thumbnail, behind the sheet in the same window.
+    // iOS recedes/scales the presenter under a pageSheet, so the thumbnail's
+    // LIVE `windowFrame()` is transform-distorted; `settledWindowFrame()`
+    // (transforms reset) gives its resting position once the presenter scales
+    // back to identity on dismiss.
     if let twin = twin, twin.contentView.window != nil {
       let f = twin.settledWindowFrame()
       destRect = f != .zero ? f : naturalRect
@@ -270,8 +256,8 @@ import UIKit
 
     detail.setHiddenForFlight(true)
     twin?.setHiddenForFlight(true)
-    // Make the registry's unregister back-flight stand down — we own this
-    // transition now (mirrors the `alreadyFlighted` source-flight guard).
+    // We own this transition now, so the registry's unregister back-flight must
+    // stand down (mirrors its `alreadyFlighted` source-flight guard).
     HeroRegistry.shared.markInteractivelyHandled(detail)
     detail.emitTransitionStart()
     active = true
@@ -280,10 +266,10 @@ import UIKit
 
   private func driveOverlay(translation: CGFloat, progress p: CGFloat) {
     guard let ov = overlay else { return }
-    // Follow the finger (source offset by the live translation) early, converge
-    // to the thumbnail as the dismiss completes. Early in the drag this keeps
-    // the overlay over the real (hidden) hero so the empty-card gap is hidden;
-    // near the end it peels into the list.
+    // Follow the finger early (source offset by the live translation), converge
+    // to the thumbnail as the dismiss completes: early on this keeps the overlay
+    // over the real (hidden) hero so the empty-card gap is hidden; near the end
+    // it peels into the list.
     let followed = naturalRect.offsetBy(dx: 0, dy: translation)
     ov.frame = Self.lerpRect(followed, destRect, p)
     ov.layer.cornerRadius = sourceCorner + (destCorner - sourceCorner) * p
@@ -303,7 +289,7 @@ import UIKit
         ov.layer.cornerRadius = self.destCorner
       },
       completion: { _ in
-        // Reveal the real list thumbnail, then fade the overlay out.
+        // Reveal the real thumbnail, then fade the overlay out.
         twin?.setHiddenForFlight(false)
         UIView.animate(
           withDuration: 0.12,
@@ -319,11 +305,10 @@ import UIKit
     )
     // Drop the link + refs now; the animation closures own the overlay.
     //
-    // Deliberately DO NOT `unmarkInteractivelyHandled` here: the hero is being
-    // torn down and its deferred `commitUnregister` (next runloop tick) must
-    // keep taking the `alreadyFlighted` early-return branch so it does not fire
-    // a second, redundant back-flight. The stale `alreadyFlighted` entry is
-    // cleared by `register` when the view (or its recycled address) next mounts.
+    // Deliberately DO NOT `unmarkInteractivelyHandled`: the hero is being torn
+    // down and its deferred `commitUnregister` must keep early-returning so it
+    // doesn't fire a redundant back-flight. `register` clears the stale mark on
+    // remount.
     self.detail = nil
     self.twin = nil
     self.active = false
@@ -334,9 +319,9 @@ import UIKit
   private func finalizeCancel() {
     guard let detail = detail else { disarm(); return }
     heroLog(HeroLog.interactive, "finalizeCancel")
-    // The sheet snapped back to rest, so the real hero is already at
-    // `naturalRect` and the overlay (translation≈0, progress≈0) sits on top of
-    // it — un-hide and remove with no visible jump.
+    // Sheet is back at rest, so the real hero is already at `naturalRect` and
+    // the overlay (translation≈0, progress≈0) sits on top — un-hide and remove,
+    // no jump.
     detail.setHiddenForFlight(false)
     twin?.setHiddenForFlight(false)
     overlay?.removeFromSuperview()
@@ -348,10 +333,10 @@ import UIKit
     // Stay armed + ready so a subsequent drag re-triggers.
   }
 
-  /// Run our overlay animation in lock-step with UIKit's sheet finish/cancel
-  /// completion after the user releases the swipe. `duration`/`curve` come from
-  /// the presented sheet's transition coordinator so we match the sheet's
-  /// slide-off (commit) or snap-back (cancel) exactly instead of snapping.
+  /// Animate the overlay in lock-step with UIKit's sheet finish/cancel
+  /// completion after release. `duration`/`curve` come from the sheet's
+  /// transition coordinator so we match its slide-off (commit) or snap-back
+  /// (cancel) instead of snapping.
   private func beginSyncedFinish(
     cancelled: Bool,
     duration: TimeInterval,
@@ -364,9 +349,9 @@ import UIKit
     let opt = Self.animationOption(for: curve)
 
     if cancelled {
-      // The sheet snapped back to rest. Fly the overlay back onto the hero's
-      // natural resting position in sync with the sheet returning up, then
-      // reveal the real hero underneath with zero jump.
+      // Fly the overlay back onto the hero's natural resting position in sync
+      // with the sheet returning up, then reveal the real hero underneath with
+      // zero jump.
       let twin = self.twin
       heroLog(HeroLog.interactive, "syncedCancel dur=\(dur)")
       UIView.animate(
@@ -392,12 +377,11 @@ import UIKit
       return
     }
 
-    // Commit: the sheet is sliding the rest of the way down and dismissing. The
-    // model frame has jumped to its final state, so the twin's settled frame
-    // now reports exactly where the list thumbnail will rest once the presenter
-    // scales back to identity. Fly the overlay there over the SAME
-    // duration/curve as the sheet completion, then crossfade to the real
-    // (now-settled) thumbnail.
+    // Commit: the sheet is sliding the rest of the way down. The model frame
+    // has jumped to its final state, so the twin's settled frame now reports
+    // where the thumbnail rests once the presenter scales back to identity. Fly
+    // the overlay there over the SAME duration/curve as the sheet completion,
+    // then crossfade to the real (now-settled) thumbnail.
     let twin = self.twin
     let finalRect = nonZero(twin?.settledWindowFrame())
       ?? nonZero(twin?.windowFrame())
@@ -427,11 +411,10 @@ import UIKit
     )
     // Tear down the link + refs now; the animation closures own the overlay.
     //
-    // Deliberately DO NOT `unmarkInteractivelyHandled` here: the hero is being
-    // torn down and its deferred `commitUnregister` must keep taking the
-    // `alreadyFlighted` early-return branch so it does not fire a second,
-    // redundant back-flight. The stale entry is cleared by `register` when the
-    // view (or its recycled address) next mounts.
+    // Deliberately DO NOT `unmarkInteractivelyHandled`: the hero is being torn
+    // down and its deferred `commitUnregister` must keep early-returning so it
+    // doesn't fire a redundant back-flight. `register` clears the stale mark on
+    // remount.
     self.detail = nil
     self.twin = nil
     self.ready = false
@@ -446,9 +429,9 @@ import UIKit
     }
   }
 
-  /// Tear down the session immediately, without reversing or completing a
-  /// transition. Used when arming a new session or when the tracked hero is no
-  /// longer eligible (deallocated, not a sheet, non-interactive dismiss).
+  /// Tear the session down immediately without reversing or completing a
+  /// transition. Used when arming a new session or when the hero is no longer
+  /// eligible (deallocated, not a sheet, non-interactive dismiss).
   private func disarm() {
     stopLink()
     if active {
@@ -468,11 +451,10 @@ import UIKit
 
   // MARK: - Helpers.
 
-  /// The presented sheet's active transition coordinator, used to observe when
-  /// the interactive swipe is released and to match its finish/cancel duration
-  /// + curve. Walks the responder chain to the presented view controller (the
-  /// one with a `presentingViewController`) and returns its coordinator, which
-  /// UIKit sets for the duration of an interactive dismissal.
+  /// The presented sheet's active transition coordinator — used to detect
+  /// release and match the finish/cancel duration + curve. Walks the responder
+  /// chain to the presented VC (the one with a `presentingViewController`); UIKit
+  /// sets its coordinator for the duration of an interactive dismissal.
   private static func sheetTransitionCoordinator(_ view: UIView) -> UIViewControllerTransitionCoordinator? {
     var responder: UIResponder? = view
     while let r = responder {
@@ -499,10 +481,9 @@ import UIKit
     return rect
   }
 
-  /// True if `view` is hosted inside a presented sheet (`pageSheet` /
-  /// `formSheet`) — the only modal styles UIKit lets the user swipe to dismiss.
-  /// `internal` (not `private`) so `InteractiveStackPop` can reuse it to
-  /// exclude sheet contexts from the native-stack pop path.
+  /// True if `view` is hosted in a presented sheet (`pageSheet` / `formSheet`),
+  /// the only modal styles UIKit lets the user swipe to dismiss. `internal` so
+  /// `InteractiveStackPop` can reuse it to exclude sheets from the pop path.
   static func isInSheet(_ view: UIView) -> Bool {
     var responder: UIResponder? = view
     while let r = responder {

@@ -5,14 +5,13 @@ import type { ViewProps } from 'react-native';
  * Transition style for a shared-hero element.
  *
  * - `"snapshot"` (default): cheap clone, translate+scale, crossfade.
- * - `"morph"`: Material container transform — interpolates corner radius and
- *   background colour in addition to bounds.
+ * - `"morph"`: Material container transform — also interpolates corner radius
+ *   and background colour, not just bounds.
  * - `"shuttle"`: alias of `snapshot` in v1; reserved for the v2 native portal
- *   that lets you render a custom React subtree mid-flight.
- * - `"zoom"`: iOS 18+ system zoom transition when the navigation context is a
- *   `UINavigationController` push. Falls back to `morph` otherwise.
- * - `"auto"`: picks `zoom` when the platform supports it natively, otherwise
- *   `morph`.
+ *   that renders a custom React subtree mid-flight.
+ * - `"zoom"`: iOS 18+ system zoom on a `UINavigationController` push; falls
+ *   back to `morph` otherwise.
+ * - `"auto"`: `zoom` where natively supported, else `morph`.
  */
 export type SharedHeroMode = 'snapshot' | 'morph' | 'shuttle' | 'zoom' | 'auto';
 
@@ -47,8 +46,8 @@ export type SharedHeroProps = ViewProps & {
   id: string;
 
   /**
-   * Optional namespace, lets you run multiple isolated registries. Defaults to
-   * "default".
+   * Namespace for isolating registries; the matching key is `namespace::id`.
+   * Defaults to "default".
    */
   namespace?: string;
 
@@ -84,16 +83,12 @@ export type SharedHeroProps = ViewProps & {
   enabled?: boolean;
 
   /**
-   * Whether this hero produces a return (back) flight when it unmounts.
-   * Defaults to `true`.
+   * Whether unmounting this hero produces a return (back) flight. Default `true`.
    *
-   * Set to `false` for a hero whose dismissal is already a self-contained
-   * animation that carries the element away (e.g. a core `<Modal>` that
-   * slides DOWN on dismiss). Without this, the library would fire a redundant
-   * return-flight when the hero unregisters at the end of that slide, flying a
-   * snapshot from the off-screen position back to the source cell. Only the
-   * unregister/back-flight path honours this; the inbound (forward) flight is
-   * unaffected.
+   * Set `false` when dismissal already animates the element away (e.g. a core
+   * `<Modal>` sliding DOWN): otherwise unregister fires a redundant return
+   * flight from the off-screen position back to the source cell. Honoured only
+   * on the unregister/back-flight path; the inbound flight is unaffected.
    */
   returnFlightEnabled?: boolean;
 

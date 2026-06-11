@@ -6,24 +6,18 @@ import android.util.Log
 import java.lang.ref.WeakReference
 
 /**
- * Process-wide registry of currently-mounted [SharedHeroView]s. Drives the
- * router-agnostic match logic.
+ * Process-wide registry of mounted [SharedHeroView]s; drives the router-
+ * agnostic match logic. Main-thread only.
  *
- * Two trigger paths exist:
- *
- * 1. **Twin appears while another is still live** — handles native-stack push
- *    and pop on react-native-screens, where both the previous and next
- *    screens' hero views are attached to the window during the navigator's
- *    slide animation. We capture the existing twin's snapshot the moment the
- *    new twin registers, so the source frame is recorded *before* the host
- *    navigator starts moving it, and schedule the flight on the next frame
- *    when the new twin has been laid out.
- *
+ * Two trigger paths:
+ * 1. **Twin appears while another is still live** — native-stack push/pop on
+ *    react-native-screens, where both screens' heroes are window-attached
+ *    during the slide. Snapshot the existing twin the moment the new one
+ *    registers (source frame recorded *before* the navigator moves it), then
+ *    fly on the next frame once the new twin is laid out.
  * 2. **Existing twin unregisters, then a new one mounts within one frame** —
- *    handles state-driven in-place transitions where one hero is unmounted
- *    and immediately replaced by a sibling with the same id.
- *
- * All access must be on the main thread.
+ *    state-driven in-place transitions: one hero unmounts and is immediately
+ *    replaced by a sibling with the same id.
  */
 object HeroRegistry {
   private val live = mutableMapOf<String, MutableList<WeakReference<SharedHeroView>>>()
@@ -34,13 +28,12 @@ object HeroRegistry {
   /** Flights queued waiting for the destination's first non-zero layout. */
   private val pendingFlights = mutableMapOf<Int, PendingFlight>()
   /**
-   * Last known-good source snapshot per `(namespace, id)` key. Populated
-   * whenever we queue a flight from a non-blank source bitmap, and used as a
-   * last-resort fallback when an unregistering view can offer neither a live
-   * render nor a usable stash (e.g. the InPlaceToggle destination whose stash
-   * never refreshed). Mirrors iOS's `lastKnownSnapshots`. Without it, a
-   * subsequent in-place toggle would either queue an invisible/blank flight
-   * (blank → snap) or skip the overlay entirely.
+   * Last known-good source snapshot per `(namespace, id)` key, populated when
+   * we queue a flight from a non-blank bitmap. Last-resort fallback when an
+   * unregistering view offers neither a live render nor a usable stash (e.g. an
+   * InPlaceToggle destination whose stash never refreshed). Mirrors iOS's
+   * `lastKnownSnapshots`; without it a later in-place toggle flies an
+   * invisible/blank overlay or skips the overlay entirely.
    */
   private val lastKnownSnapshots = mutableMapOf<String, HeroSnapshot>()
   private val handler = Handler(Looper.getMainLooper())
@@ -49,22 +42,20 @@ object HeroRegistry {
   private fun HeroSnapshot.hasBitmap(): Boolean = bitmap != null
 
   /**
-   * Source pending an in-place match. We keep the source view's identity
-   * hash alongside the snapshot so the match logic can detect "the new dest
-   * is the SAME view instance that just unregistered" — a host-navigator
-   * reparent (detach + reattach within a tick) that must NOT fire a flight
-   * from a view onto itself (the iOS "same-id churn" ghost-snapshot bug).
+   * Source pending an in-place match. Keeps the source's identity hash so the
+   * match logic can detect "new dest is the SAME instance that just
+   * unregistered" — a host-navigator reparent (detach+reattach within a tick)
+   * that must NOT fly a view onto itself (the iOS "same-id churn" ghost bug).
    */
   private data class PendingSource(val snapshot: HeroSnapshot, val sourceViewId: Int)
 
   /**
    * Flight queued waiting for the destination's first layout pass.
    *
-   * [inPlace] marks a same-screen state toggle (unmount → remount of the same
-   * id with no host-navigator transition). Such flights fire SYNCHRONOUSLY
-   * from [notifyLayoutReady] — adding the overlay in the same frame the new
-   * layout lands — because there is no screen transition to mask the
-   * one-frame gap the normal deferred path would leave.
+   * [inPlace] marks a same-screen state toggle (same-id unmount→remount, no
+   * host transition). These fire SYNCHRONOUSLY from [notifyLayoutReady] —
+   * overlay added in the same frame the layout lands — since there's no screen
+   * transition to mask the one-frame gap the deferred path leaves.
    */
   private data class PendingFlight(
     val snapshot: HeroSnapshot,
@@ -73,17 +64,12 @@ object HeroRegistry {
   )
 
   fun register(view: SharedHeroView) {
-    // Fabric recycles RCT view instances. When a previously-recycled view
-    // is GC'd, an identity hash can collide with a new view, OR if a
-    // recycled view is reused, the same view re-registers later in a new
-    // logical lifecycle. Either way, any state we keyed by its
-    // `System.identityHashCode` belongs to the previous lifecycle and
-    // must be cleared so this fresh registration starts from scratch.
-    //
-    // Symptom if we skip this: `alreadyFlighted` accumulates a stale entry
-    // for a recycled view's address; on its next unregister we hit the
-    // "already participated in a recent twin-flight, skip" branch and the
-    // back-flight never fires.
+    // Fabric recycles RCT view instances, so a `System.identityHashCode` can
+    // belong to a prior lifecycle (GC'd address reused, or a recycled view
+    // re-registering). Clear any state keyed by it so this registration starts
+    // fresh. Otherwise `alreadyFlighted` keeps a stale entry and the view's
+    // next unregister takes the "already flighted, skip" branch — back-flight
+    // never fires.
     val viewId = System.identityHashCode(view)
     alreadyFlighted.remove(viewId)
     pendingFlights.remove(viewId)
@@ -92,10 +78,10 @@ object HeroRegistry {
     val bucket = live.getOrPut(key) { mutableListOf() }
     bucket.removeAll { it.get() == null || it.get() === view }
 
-    // Prefer the most recently-registered twin that's still ATTACHED to a
-    // window. Without this filter, rapid push/pop cycles can leave a stale
-    // outgoing view in the bucket — `captureSnapshot()` would then bail (or
-    // return an empty bitmap) and the flight would silently fail to render.
+    // Prefer the most recently-registered twin still ATTACHED to a window.
+    // Without this, rapid push/pop cycles leave a stale outgoing view in the
+    // bucket whose `captureSnapshot()` bails (or returns empty) — the flight
+    // silently fails to render.
     val twin = bucket.asReversed().firstNotNullOfOrNull { ref ->
       val v = ref.get()
       if (v != null && v.isAttachedToWindow) v else null
@@ -107,39 +93,34 @@ object HeroRegistry {
       return
     }
 
-    // No live twin, but a twin with the SAME key unregistered earlier in this
-    // runloop tick. On Android — where Fabric does NOT recycle our view — an
-    // in-place toggle (e.g. the InPlaceToggle example: same `id`, different
-    // React `key`, 120pt ↔ 320pt) unmounts the old hero and mounts a *brand
-    // new* destination view, and Fabric processes the Remove mount item
-    // BEFORE the Insert. So by the time this `register` runs the old twin has
-    // already detached and the twin-on-register fast path above misses.
+    // No live twin, but a same-key twin unregistered earlier this tick. On
+    // Android (Fabric doesn't recycle our view) an in-place toggle (e.g.
+    // InPlaceToggle: same `id`, different React `key`, 120pt ↔ 320pt) unmounts
+    // the old hero and mounts a *brand new* dest, and Fabric runs the Remove
+    // before the Insert — so by now the old twin has detached and the
+    // twin-on-register fast path above missed.
     //
-    // If we just fell through to the async match-pass (as we used to), the
-    // freshly-mounted destination would render once at its full destination
-    // size before the next-tick match-pass hides it — the "hard snap" — and
-    // the overlay would then appear a further tick later, leaving a visible
-    // blank. There is no host-navigator transition here to mask either gap.
+    // Falling through to the async match-pass (as we used to) renders the fresh
+    // dest at full size before the next-tick pass hides it (the "hard snap"),
+    // then shows the overlay a tick later (a visible blank) — and there's no
+    // host transition to mask either gap.
     //
-    // Handle it synchronously instead: hide the destination NOW (we're inside
-    // `onAttachedToWindow`, before the view's first draw, so it never renders
-    // uncovered) and arm an in-place flight that fires the instant Fabric
-    // applies the new layout in this same frame (see `notifyLayoutReady`).
-    // This mirrors iOS's synchronous in-place `notifyLayoutReady` path.
+    // Handle it synchronously: hide the dest NOW (inside `onAttachedToWindow`,
+    // before its first draw, so it never renders uncovered) and arm an in-place
+    // flight that fires the instant Fabric applies the new layout this same
+    // frame (see `notifyLayoutReady`). Mirrors iOS's synchronous in-place path.
     //
-    // `sourceViewId != viewId` skips a host-navigator reparent that detached +
-    // reattached the SAME instance within a tick — flying a view onto itself
-    // renders a phantom snapshot over the destination (the iOS same-id churn
-    // ghost bug).
+    // `sourceViewId != viewId` skips a reparent that detached+reattached the
+    // SAME instance within a tick — flying a view onto itself paints a phantom
+    // snapshot over the dest (the iOS same-id churn ghost bug).
     val recent = recentlyUnregistered[key]
     if (recent != null && recent.sourceViewId != viewId) {
       recentlyUnregistered.remove(key)
       pendingMatchKeys.remove(key)
-      // The source snapshot was captured from the (now-detached) outgoing
-      // view. If that bitmap is blank — the recurring repeat-toggle failure,
-      // where the previous flight's destination became this source without
-      // ever refreshing a real stash — fall back to the last known-good snap
-      // for this key so we still fly a visible bitmap instead of nothing.
+      // Source snapshot came from the now-detached outgoing view. If its bitmap
+      // is blank (the repeat-toggle failure: the previous flight's dest became
+      // this source without refreshing a real stash) fall back to the last
+      // known-good snap for this key so we fly a visible bitmap.
       val sourceSnap = resolveInPlaceSource(recent.snapshot, key)
       Log.d(
         TAG,
@@ -165,25 +146,23 @@ object HeroRegistry {
       if (bucket.isEmpty()) live.remove(key)
     }
     if (alreadyFlighted.remove(System.identityHashCode(view))) {
-      // This view already played the source of a recent twin-flight; don't
-      // re-arm the in-place match path with a now-stale snapshot.
+      // Already played the source of a recent twin-flight; don't re-arm the
+      // in-place match path with a now-stale snapshot.
       return
     }
 
-    // Opt-out: a hero declared `returnFlightEnabled = false` performs a quiet
-    // teardown — it never initiates a return/back-flight on unmount. Used by
-    // the core `<Modal>` example whose dismiss is a plain slide-DOWN that
-    // carries the hero off-screen with it; firing a back-flight here would
-    // redundantly fly a snapshot back up to the list cell after the slide.
+    // `returnFlightEnabled = false`: quiet teardown, no return/back-flight on
+    // unmount. Used by the core `<Modal>` example whose dismiss slides the hero
+    // off-screen — a back-flight here would redundantly fly a snapshot back up
+    // to the list cell after the slide.
     if (!view.config.returnFlightEnabled) {
       Log.d(TAG, "unregister quiet teardown (returnFlightEnabled=false) source=${id(view)} key=$key")
       return
     }
 
-    // `captureOrCachedSnapshot` falls back to the snapshot we stashed in
-    // `onDetachedFromWindow` if the view is already off-window, so the
-    // back-flight survives navigators that unmount the source before the
-    // destination re-attaches.
+    // `captureOrCachedSnapshot` falls back to the `onDetachedFromWindow` stash
+    // if the view is already off-window, so the back-flight survives navigators
+    // that unmount the source before the dest re-attaches.
     val snap = view.captureOrCachedSnapshot()
     Log.d(
       TAG,
@@ -192,10 +171,9 @@ object HeroRegistry {
         "blank=${isLikelyBlank(snap?.bitmap)} rect=${snap?.rect}",
     )
 
-    // Fast path: a sibling twin is still attached. Fire back-flight now
-    // without waiting for the match-pass tick. Covers navigators that keep
-    // both screens attached (the destination won't re-register and the
-    // twin-on-register path can't trigger).
+    // Fast path: a sibling twin is still attached — fire the back-flight now,
+    // no match-pass tick. Covers navigators that keep both screens attached
+    // (the dest won't re-register, so the twin-on-register path can't fire).
     if (snap != null) {
       val liveTwin = live[key]?.asReversed()?.firstNotNullOfOrNull { ref ->
         val v = ref.get()
@@ -235,10 +213,9 @@ object HeroRegistry {
     }
     Log.d(TAG, "runTwinFlight source=${id(source)} dest=${id(dest)} sourceRect=${source.windowRect()}")
     alreadyFlighted.add(System.identityHashCode(source))
-    // Hide DEST now (it's about to be laid out and we don't want it to flash
-    // visible). Source is hidden later in `tryFire` so its disappearance and
-    // the flight overlay's appearance commit in the same frame — no visible
-    // blank.
+    // Hide DEST now so it can't flash visible before layout. Source is hidden
+    // later in `tryFire` so its disappearance and the overlay's appearance
+    // commit in the same frame — no visible blank.
     dest.setHiddenForFlight(true)
     queuePendingFlight(snap, source, dest)
   }
@@ -255,9 +232,9 @@ object HeroRegistry {
     dest: SharedHeroView,
     inPlace: Boolean = false,
   ) {
-    // Remember the last known-good (non-blank) source snapshot for this key so
-    // a future toggle whose source can't produce a usable bitmap can fall back
-    // to it instead of flying an invisible overlay.
+    // Remember the last known-good (non-blank) snapshot for this key so a
+    // future toggle whose source can't render falls back to it instead of
+    // flying an invisible overlay.
     if (snap.hasBitmap() && !isLikelyBlank(snap.bitmap)) {
       lastKnownSnapshots[keyFor(dest)] = snap
     }
@@ -275,20 +252,18 @@ object HeroRegistry {
     val key = System.identityHashCode(view)
     val pending = pendingFlights[key] ?: return
     if (pending.inPlace) {
-      // In-place toggle: no host-navigator transition exists to mask a
-      // one-frame gap, so fire SYNCHRONOUSLY in this layout pass. We are
-      // inside `onSizeChanged` (i.e. inside the view's `layout` pass), where
-      // the view's and its ancestors' `left/top/right/bottom` are already
-      // assigned, so `settledWindowRect()` (which the flight engine uses for
-      // the destination, NOT `getLocationInWindow`) is stable. Adding the
-      // overlay in this same frame means the destination is hidden, the
-      // overlay covers the source position, and the morph all commit together
-      // — no snap to the destination size, no blank gap.
+      // In-place toggle: no host transition to mask a one-frame gap, so fire
+      // SYNCHRONOUSLY in this layout pass. We're inside `onSizeChanged` (the
+      // view's `layout` pass), so ancestor `left/top/right/bottom` are assigned
+      // and `settledWindowRect()` — which the engine uses for the dest, NOT
+      // `getLocationInWindow` — is stable. Overlay-in-this-frame means dest
+      // hidden, overlay over the source, and the morph all commit together —
+      // no snap to dest size, no blank gap.
       tryFire(view, attemptsUsed = 0)
       return
     }
-    // Navigation flights: defer to the next frame so `getLocationInWindow` and
-    // any in-progress host-navigator transform have a tick to settle.
+    // Navigation flights: defer one frame so `getLocationInWindow` and any
+    // in-progress host transform have a tick to settle.
     handler.post { tryFire(view, attemptsUsed = 0) }
   }
 
@@ -299,21 +274,20 @@ object HeroRegistry {
       return false
     }
 
-    // Resolve the best available NON-BLANK source bitmap, in priority order:
-    //   1. the captured source snapshot (the common case),
-    //   2. the DESTINATION's freshly-rendered content — for an in-place toggle
-    //      this is the SAME image, and `renderContentForFlightFallback()` draws
-    //      it directly so it ignores the dest's hidden alpha,
+    // Resolve the best NON-BLANK source bitmap, in priority order:
+    //   1. the captured source snapshot (common case),
+    //   2. the DEST's freshly-rendered content — same image for an in-place
+    //      toggle, and `renderContentForFlightFallback()` draws it directly so
+    //      it ignores the dest's hidden alpha,
     //   3. the per-key last-known-good snapshot.
     // Any non-blank capture is promoted into `lastKnownSnapshots` so future
     // toggles always have a fallback.
     //
-    // Why this matters: on a COLD-LAUNCH FIRST in-place toggle the captured
-    // source is blank (the remote <Image> composites a few frames after mount)
-    // AND there's no prior known-good snapshot, so without this the flight flew
-    // an invisible overlay — "blank for a frame, then snap to the destination
-    // image". Subsequent toggles worked only because by then the image had
-    // painted and `lastKnownSnapshots` was populated.
+    // Matters on a COLD-LAUNCH FIRST toggle: the captured source is blank (the
+    // remote <Image> composites a few frames after mount) and there's no prior
+    // snapshot, so without this the flight flew an invisible overlay ("blank
+    // for a frame, then snap"). Later toggles worked only because the image had
+    // painted and `lastKnownSnapshots` was populated by then.
     val destKey = keyFor(dest)
     var snap = pending.snapshot
     var haveContent = snap.hasBitmap() && !isLikelyBlank(snap.bitmap)
@@ -337,13 +311,12 @@ object HeroRegistry {
       }
     }
 
-    // Cold-launch first toggle: neither the source, the destination, nor a
-    // prior snapshot has a painted bitmap yet. Rather than fly a blank overlay,
-    // wait a bounded number of frames for the <Image> to paint — the
-    // destination stays hidden meanwhile (the source already unmounted), so
-    // there is no flash of the destination size. The parallel `pollForLayout`
-    // loop re-invokes us each frame; once the budget is spent we fire
-    // best-effort so we never hang or leave the destination hidden.
+    // Cold-launch first toggle: source, dest, and prior snapshot are all
+    // unpainted. Rather than fly a blank overlay, wait a bounded number of
+    // frames for the <Image> to paint — the dest stays hidden meanwhile (source
+    // already unmounted) so its size never flashes. `pollForLayout` re-invokes
+    // us each frame; once the budget is spent we fire best-effort so we never
+    // hang or leave the dest hidden.
     if (!haveContent && pending.inPlace && attemptsUsed < CONTENT_WAIT_ATTEMPTS) {
       return false
     }
@@ -354,20 +327,16 @@ object HeroRegistry {
       "flight fire dest=${id(dest)} settledRect=${dest.settledWindowRect()} " +
         "attemptsUsed=$attemptsUsed haveContent=$haveContent",
     )
-    // Hide source + add overlay snapshot in the same frame so they commit
-    // together; no blank gap where the source view briefly disappears.
+    // Hide source + add the overlay in the same frame so they commit together —
+    // no blank gap where the source briefly disappears.
     //
-    // We intentionally do NOT hide OTHER heros in the same namespace. An
-    // earlier version did ("auxiliaryHidden") to keep visual focus on the
-    // single flying snapshot, but that produced an obvious bug on screens
-    // with multiple heros far away from the flight path (e.g.
-    // BasicImageHero — a vertical list where tapping one image made every
-    // OTHER image disappear under its caption while the flight ran, and
-    // the same gap re-appeared during the back-flight as the list re-
-    // entered the window). The flight overlay is already on a window-level
-    // layer above everything; the natural screen-fade does the rest, and
-    // leaving siblings visible matches Material container-transform
-    // behaviour.
+    // We intentionally do NOT hide OTHER heroes in the namespace. An earlier
+    // version did ("auxiliaryHidden") for focus, but it made siblings far from
+    // the flight path vanish (e.g. BasicImageHero: tapping one image blanked
+    // every other under its caption during the flight, and again on the
+    // back-flight as the list re-entered). The overlay is already on a
+    // window-level layer; the screen-fade does the rest, and leaving siblings
+    // visible matches Material container-transform.
     val sourceView = pending.source?.get()
     sourceView?.setHiddenForFlight(true)
     FlightEngine.run(snap, sourceView, dest, onAllDone = null)
@@ -406,11 +375,10 @@ object HeroRegistry {
       val dest = live[key]?.asReversed()?.firstNotNullOfOrNull { it.get() }
       val source = recentlyUnregistered.remove(key) ?: continue
       if (dest != null) {
-        // Same-view churn guard (defense-in-depth, mirrors iOS): a host-
-        // navigator reparent can detach + reattach the SAME view instance
-        // within a tick. Firing a flight from that view onto itself animates
-        // a phantom snapshot over the destination (the iOS "same-id churn"
-        // ghost bug). Skip it.
+        // Same-view churn guard (defense-in-depth, mirrors iOS): a reparent
+        // can detach+reattach the SAME instance within a tick; flying it onto
+        // itself paints a phantom snapshot over the dest (same-id churn ghost
+        // bug). Skip it.
         if (source.sourceViewId == System.identityHashCode(dest)) {
           Log.d(TAG, "matchPass skip same-id churn key=$key dest=${id(dest)}")
           continue
@@ -433,10 +401,10 @@ object HeroRegistry {
 
   /**
    * Resolve the SOURCE snapshot for an in-place flight. Prefers the freshly
-   * captured [recent] snapshot, but if its bitmap is blank (the repeat-toggle
-   * failure mode) falls back to the last known-good snapshot for [key] so the
-   * flight still flies a visible bitmap. The outgoing view's geometry is kept
-   * when usable; only the bitmap content is borrowed from the fallback.
+   * captured [recent] snapshot; if its bitmap is blank (repeat-toggle failure)
+   * falls back to the last known-good snapshot for [key] so we still fly a
+   * visible bitmap. Keeps the outgoing view's geometry when usable, borrowing
+   * only the bitmap from the fallback.
    */
   private fun resolveInPlaceSource(recent: HeroSnapshot, key: String): HeroSnapshot {
     if (recent.hasBitmap() && !isLikelyBlank(recent.bitmap)) return recent
