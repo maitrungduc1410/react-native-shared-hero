@@ -10,6 +10,8 @@ import type { RootStackParamList } from './navigation';
 import HomeScreen from './screens/Home';
 import BasicImageHeroList from './screens/BasicImageHero/List';
 import BasicImageHeroDetail from './screens/BasicImageHero/Detail';
+import TextHeroList from './screens/TextHero/List';
+import TextHeroDetail from './screens/TextHero/Detail';
 import CardMorphList from './screens/CardMorph/List';
 import CardMorphDetail from './screens/CardMorph/Detail';
 import ModalHeroList from './screens/ModalHero/List';
@@ -88,6 +90,16 @@ export default function App() {
           <Stack.Screen
             name="BasicImageHeroDetail"
             component={BasicImageHeroDetail}
+            options={heroScreenOptions}
+          />
+          <Stack.Screen
+            name="TextHero"
+            component={TextHeroList}
+            options={{ title: 'Text hero' }}
+          />
+          <Stack.Screen
+            name="TextHeroDetail"
+            component={TextHeroDetail}
             options={heroScreenOptions}
           />
           <Stack.Screen

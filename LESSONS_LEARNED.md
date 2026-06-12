@@ -27,6 +27,40 @@ For the design rationale behind the architecture these lessons reference, see
 
 ---
 
+## 2026-06-12 — [iOS/UIKit] Very fast edge-swipe pop "restored" then jumped — pre-activation commit/cancel was guessed from the lagging presentation frame
+
+**Symptom**: Tap a list cell → detail, then swipe-back from the left edge **very fast**. The detail fully dismissed and the list fully settled (cell back at its natural spot), and only THEN the cell snapped to its detail-screen position and ran a flight from there. Slow/normal swipes were fine.
+
+**Root cause**: On a hard flick the driving gesture recognizer ends before `captureRecognizer()` can latch it (`findActivePopRecognizer` only returns a recognizer in `.began`/`.changed`), so `InteractiveStackPop` infers release from the `"divergence"` heuristic. The pre-activation branch then classified commit vs cancel from the *instantaneous presentation translation* — which reads ~0 on a flick (the presentation layer lags the finger, while the model frame is pinned at the dismissed value for the entire interactive transition). `transl≈0 ≤ activateThreshold` took the **cancel/restore** path on what was actually a commit. The controller stood down, the detail unregistered, and the registry's *time-driven* `unregister-twin` back-flight fired after the screen had already settled — gluing the overlay to the detail rect and flying late (the jump).
+
+**Fix**: Don't guess commit vs cancel at the release instant when release was detected via `"divergence"`. Synthesize the overlays and hand off to the release-follow phase (`beginRelease` + `driveRelease`), which reads commit vs cancel from where the page actually comes to **rest** — the same authority the activated path already uses. The `translation > activateThreshold` fast-commit and the recognizer-confirmed tiny-cancel (`restoreTwins`) paths are unchanged.
+
+**Lesson**: During a UIKit interactive transition the model frame sits at the *final* value the whole time and the presentation frame lags the finger, so **neither frame can classify commit vs cancel at the release instant** — only the post-release settle can. Any "decide now from translation" shortcut will misfire on fast input. Route uncertain releases through the settle observer instead of guessing.
+
+## 2026-06-13 — [Android] One text hero of a sibling pair flew late — the blank-bitmap heuristic false-positived on sparse text
+
+**Symptom**: In the Text example, only the "Pacific Shelf" row desynced on back-nav (detail→list): the title settled first, then the subtitle visibly flew *after* it. Every other row was in sync, the *forward* flight was fine, and iOS was fine everywhere. Title length was a red herring — "Pine Cathedral" is just as long and never broke.
+
+**Diagnosis (from logcat)**: Title and subtitle are independent in-place back-flights (Android RNS detaches the detail then re-attaches the list within a tick → `register in-place fire`). The title fired at `attemptsUsed=0 haveContent=true`; the subtitle fired ~133ms (12 frames) later at `attemptsUsed=12 haveContent=false`. The subtitle's source bitmap was logged `blank=true` with `hadStash=false`, so it had no stash and no last-known-good fallback, hit the `inPlace` `CONTENT_WAIT_ATTEMPTS` (12) gate in `HeroRegistry.tryFire`, and burned the whole budget before firing best-effort with a blank overlay.
+
+**Root cause**: `isLikelyBlankBitmap` sampled 5 points in the centre band, assuming "a real hero always has opaque pixels near its centre" — true for opaque image rects, false for text. Glyphs are sparse on a transparent background, and the centre column of a line often lands on a space between words. For the subtitle "Sea stacks at low tide" all five samples hit transparent gaps → the heuristic called a real line of text "blank". That false-blank then (a) blocked the rolling `dispatchDraw` stash (`hadStash=false`) and (b) blocked the `lastKnownSnapshots` fallback, leaving the flight with no content → the content-wait delay. It was deterministic per-string (which is why one specific subtitle tripped it), and titles escaped because their larger/denser glyphs reliably cover a sample point.
+
+**Fix**: Sample a coarse grid spanning the **whole** bitmap (10×10 cell centres) instead of a few centre points; any single opaque sample ⇒ not blank. Scattered glyphs hit several grid cells, so real text reads as non-blank, while a genuinely empty bitmap stays all-transparent. Still ~100 `getPixel` calls — cheap enough for capture/flight-decision time.
+
+**Lesson**: A "is this bitmap empty?" heuristic tuned for opaque images will misfire on text/sparse content, and the misfire isn't cosmetic — it suppresses the snapshot stash *and* the fallback, which on the in-place path turns into a visible per-hero timing delay. Sample the full area, not the centre, and remember that any false "blank" cascades into the snapshot/content-wait machinery.
+
+## 2026-06-12 — [iOS/Android] Text heroes cropped (and then mis-positioned) mid-flight — content mode must be aspect-aware AND not re-anchor
+
+**Symptom (1)**: A `<SharedHero>` wrapping `<Text>` flew fine for square images but a wide title (e.g. "Pine Cathedral") was center-cropped during the flight, rendering as a giant "ne Cathed" before snapping to the real text. Images were immune.
+
+**Symptom (2)** (after the first fix): the subtitle landed too far to the RIGHT on the back-flight (detail→list), then crossfaded to the correct left-aligned text — but the forward flight (list→detail) was fine.
+
+**Root cause**: The flying overlay scaled the source bitmap with `.scaleAspectFill` (iOS) / a `max`-cover matrix (Android) and clipped. The bitmap's intrinsic aspect equals the SOURCE rect; the overlay interpolates toward the DEST rect, so whenever source/dest aspect ratios diverge the content is center-cropped. Images escaped because the examples keep aspect ratios matched (`16/10 ↔ 16/10`), where every content mode is identical; text almost always changes shape. Switching to `scaleAspectFit` stopped the *crop* but introduced *symptom 2*: a tight text box's aspect differs slightly between font sizes (leading doesn't scale with glyph advance), and `aspectFit` **centers** — so when the source box was taller-aspect than the dest (the back direction) the left-aligned text landed inset from the left. Forward, the source was wider-aspect → fit-by-width → left edge at 0 → looked fine. Directionally inconsistent.
+
+**Fix**: Aspect-aware by MODE, and for the tight-box case map box→box directly. `morph`/`zoom`/`auto` keep aspect-FILL (photo container transform — the crop morphs, see 2026-06-06). `snapshot` (default; text & arbitrary content) uses **scale-to-fill** (iOS `.scaleToFill`; Android `ScaleType.FIT_XY`): a tight text box IS its content, so filling it lands the glyphs exactly on the destination box — correct origin, consistent both directions, and never cropped. When aspects already match (the image examples) fill/fit/scaleToFill are identical, so images are untouched.
+
+**Lesson**: For a flown bitmap, the content mode is the whole ball game. `aspectFill` = crop-morph (right for photos, slices text); `aspectFit` = no crop but RE-ANCHORS to center (mis-positions edge-aligned content); `scaleToFill` = maps box→box exactly (right for tight/text boxes, distorts only if the box aspect itself changed). Pick per intent. And a single scaled bitmap still can't represent a content *reflow* (1-line→2-line) — keep text heroes single-line or matching line counts on both ends for a perfectly clean flight.
+
 ## 2026-06-12 — [Android] Published build broke on RN 0.84 — `UIManagerHelper.getEventDispatcher` single-arg overload only exists on 0.85+
 
 **Symptom**: A user on RN 0.84.0 (New Architecture) hit a compile error from the **published** package — `SharedHeroView.kt: No value passed for parameter 'uiManagerType'` — while our own freshly-generated test project and the example app built fine.

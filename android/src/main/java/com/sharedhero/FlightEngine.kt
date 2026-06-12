@@ -156,16 +156,22 @@ object FlightEngine {
     // NOTE: named `sourceImageView`/`destImageView`, not shadowing the
     // `sourceView: SharedHeroView?` param — the inner closures call
     // `setHiddenForFlight` on the SharedHeroView, not the ImageView.
-    // ScaleType.MATRIX (not the default FIT_CENTER): `setupOverlayTransform`
-    // drives the draw matrix per frame so the bitmap aspect-FILLS (center-crops)
-    // the CURRENT interpolated rect every tick, like iOS's `.scaleAspectFill`.
-    // FIT_CENTER would letterbox the square source inside the wide dest-sized
-    // view and hold that one crop until the real view takes over at t=1 — the
-    // aspect/crop snap reported on ArcPath.
+    //
+    // Scale type is aspect-aware by mode, mirroring iOS:
+    // - morph: ScaleType.MATRIX — `setupOverlayTransform` drives the draw matrix
+    //   per frame so the bitmap aspect-FILLS (center-crops) the CURRENT
+    //   interpolated rect every tick, morphing the crop source→dest (photos). A
+    //   static scale type would lock one crop and snap at handoff (the ArcPath bug).
+    // - snapshot (default; text & arbitrary content): ScaleType.FIT_XY —
+    //   scale-to-fill. The bitmap stretches to the view (laid out at dest size,
+    //   then `container` scaleX/Y warps it to the interpolated rect), so a tight
+    //   text box maps directly onto its destination box: exact origin, no
+    //   letterbox/center offset, no crop. FIT_CENTER/MATRIX-contain would CENTER
+    //   the box and land left-aligned text inset from the left on a back-flight.
     val sourceImageView = sourceBitmap?.let {
       ImageView(ctx).apply {
         setImageBitmap(it)
-        scaleType = ImageView.ScaleType.MATRIX
+        scaleType = if (isMorph) ImageView.ScaleType.MATRIX else ImageView.ScaleType.FIT_XY
       }
     }
     val destImageView = destBitmap?.let { ImageView(ctx).apply { setImageBitmap(it); alpha = 0f } }
@@ -473,17 +479,20 @@ object FlightEngine {
       container.translationX = cx - endCx
       container.translationY = cy - endCy
 
-      // Continuous aspect-fill of the flying bitmap against the CURRENT
-      // interpolated rect (w×h), mirroring iOS `.scaleAspectFill`. The container
-      // is laid out at the DEST size and morphs aspect via a NON-UNIFORM scale
-      // (sx != sy when aspects differ), which alone would squash a statically-
-      // scaled child. Counteract by pre-scaling the image by (f / sx, f / sy),
-      // `f` = the uniform on-screen cover scale for the current rect. Net: a
-      // uniform center-crop every frame — undistorted square at t=0 (the list
-      // thumb), the dest's wide crop at t=1 (the detail hero), morphing between
-      // with no aspect/crop snap at handoff. Reusing one Matrix keeps this
-      // allocation-free per frame.
-      if (srcImage != null && bmpW > 0 && bmpH > 0 && w > 0 && h > 0 && sx > 0f && sy > 0f) {
+      // MORPH ONLY: continuous aspect-FILL (center-crop) of the flying bitmap
+      // against the CURRENT interpolated rect (w×h), mirroring iOS `.scaleAspectFill`.
+      // The container is laid out at the DEST size and morphs aspect via a
+      // NON-UNIFORM scale (sx != sy when aspects differ), which alone would squash
+      // a statically-scaled child. Counteract by pre-scaling the image by
+      // (f / sx, f / sy), `f` = the uniform on-screen COVER scale for the current
+      // rect. Net: a uniform center-crop every frame — square thumb at t=0, the
+      // dest's wide crop at t=1, morphing between with no aspect snap at handoff.
+      //
+      // snapshot mode skips this entirely: its ImageView is FIT_XY (scale-to-fill),
+      // so the container's own scaleX/Y stretches the bitmap to the interpolated
+      // rect — a tight text box maps directly onto its dest box (exact origin),
+      // which a centered crop/contain would offset.
+      if (isMorph && srcImage != null && bmpW > 0 && bmpH > 0 && w > 0 && h > 0 && sx > 0f && sy > 0f) {
         val f = maxOf(w.toFloat() / bmpW, h.toFloat() / bmpH)
         val msx = f / sx
         val msy = f / sy

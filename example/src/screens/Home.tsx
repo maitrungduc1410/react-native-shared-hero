@@ -23,6 +23,12 @@ const EXAMPLES: ExampleEntry[] = [
       'List → detail. The simplest case: image grows into the detail screen.',
   },
   {
+    route: 'TextHero',
+    title: 'Text hero',
+    description:
+      'Plain <Text> heroes: a small one-line label grows into a large headline that re-wraps — without cropping the glyphs.',
+  },
+  {
     route: 'FlatListHero',
     title: 'FlatList (virtualized)',
     description:

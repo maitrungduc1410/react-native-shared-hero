@@ -2,6 +2,8 @@ export type RootStackParamList = {
   Home: undefined;
   BasicImageHero: undefined;
   BasicImageHeroDetail: { id: string };
+  TextHero: undefined;
+  TextHeroDetail: { id: string };
   CardMorph: undefined;
   CardMorphDetail: { id: string };
   ModalHero: undefined;

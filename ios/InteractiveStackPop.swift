@@ -361,14 +361,35 @@ import UIKit
 
     if !active {
       // The gesture can end BEFORE we cross the activation threshold (a tiny or
-      // very fast swipe). Decide from motion: near rest → cancel/restore;
-      // already moved far → synthesise overlays and commit.
+      // very fast swipe). Decide from motion — but the right SIGNAL depends on
+      // how the release was detected.
       if adopted, releaseDetected(detail: detail, modelFrame: live) {
         if translation > Self.activateThreshold {
+          // The presentation frame has demonstrably moved past takeover, so this
+          // is unambiguously a commit-in-progress — synthesise overlays and commit.
           heroLog(HeroLog.stackPop, "released before activation → commit by=\(releaseBy) transl=\(rd(translation))")
           synthesizeOverlaysForCommit()
           beginRelease()
+        } else if releaseBy == "divergence" {
+          // HARD FLICK: the gesture ended before we could latch its recognizer,
+          // so release came from the divergence heuristic. The instantaneous
+          // `translation` is meaningless here — the presentation layer still lags
+          // near rest (~0) while the model frame is pinned at the dismissed value
+          // for the whole interactive transition, so NEITHER frame can classify
+          // commit vs cancel yet. Don't guess: build the overlays and hand off to
+          // the release-follow phase, which reads commit vs cancel from where the
+          // page actually comes to REST (same authority as the activated path).
+          //
+          // The old code guessed "restore" from `transl≈0` here, which mis-handled
+          // every fast flick: the list settled, then the detail's late unregister
+          // fired the registry's time-driven back-flight, snapping the cell to its
+          // detail-screen rect and flying from there (the reported jump).
+          heroLog(HeroLog.stackPop, "released before activation → follow release by=\(releaseBy) transl=\(rd(translation))")
+          synthesizeOverlaysForCommit()
+          beginRelease()
+          driveRelease(detail: detail)
         } else {
+          // Recognizer-confirmed lift near rest — a genuine tiny-swipe cancel.
           heroLog(HeroLog.stackPop, "released before activation → restore by=\(releaseBy) transl=\(rd(translation))")
           restoreTwins()
         }
@@ -490,7 +511,13 @@ import UIKit
       let iv = UIImageView(image: img)
       iv.frame = ov.bounds
       iv.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-      iv.contentMode = .scaleAspectFill
+      // Match FlightEngine's mode-aware content mode so an interactive return
+      // renders content identically to a time-driven one: morph center-crops
+      // (photos), snapshot scale-to-fills so a tight text box maps box→box (no
+      // crop, no center re-anchor that would shift left-aligned text).
+      let mode = detail.config.mode
+      let isMorph = mode == "morph" || mode == "zoom" || mode == "auto"
+      iv.contentMode = isMorph ? .scaleAspectFill : .scaleToFill
       ov.addSubview(iv)
     }
 

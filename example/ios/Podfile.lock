@@ -1863,7 +1863,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - SharedHero (1.0.0):
+  - SharedHero (1.0.2):
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -2196,7 +2196,7 @@ SPEC CHECKSUMS:
   ReactCommon: fe2a3af8975e63efa60f95fca8c34dc85deee360
   ReactNativeDependencies: ced3d0a04e9c6a84928dec90618f299ff2af62c4
   RNScreens: 991cc417cd396602a6cf59a42139e5a9d91462a9
-  SharedHero: 224311b2a1abce9c5221840db9f3ee42d5b992e6
+  SharedHero: ae5a7879f6293cbf1f4a70f3c62ed1e180939d82
   Yoga: e83c3121d079541e69f3c5c623faaaf933fb5812
 
 PODFILE CHECKSUM: 1a6437d6be06dba62cbb9fb08ef70a84d0e781af

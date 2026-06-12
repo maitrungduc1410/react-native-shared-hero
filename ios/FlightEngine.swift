@@ -116,7 +116,24 @@ import UIKit
       let iv = UIImageView(image: img)
       iv.frame = flightView.bounds
       iv.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-      iv.contentMode = .scaleAspectFill
+      // Aspect-aware fit. The flying bitmap's intrinsic aspect == the SOURCE
+      // rect; the overlay interpolates toward the DEST rect, so source/dest
+      // aspect ratios that DIFFER force a choice of how to reconcile them.
+      //
+      // - `morph`/`zoom`/`auto`: aspect-FILL — center-crop that morphs source→dest
+      //   (square thumb → wide detail photo). See LESSONS_LEARNED 2026-06-06.
+      // - `snapshot` (default; text & arbitrary content): scale-to-FILL — map the
+      //   source box directly onto the dest box. A tight text box IS its content,
+      //   so this lands the glyphs exactly on the destination box (correct origin,
+      //   consistent in BOTH directions) and never crops (the wide "Feb 09" that
+      //   `scaleAspectFill` sliced into a giant "eb o" is fixed). NOT
+      //   `scaleAspectFit`: that preserves aspect but CENTERS, so on a back-flight
+      //   where the source box is taller-aspect than the dest, the left-aligned
+      //   text landed inset from the left ("subtitle too far right", then a
+      //   crossfade jump to the real text). When aspects already MATCH (the image
+      //   examples, e.g. 16/10 ↔ 16/10) fill/fit/scaleToFill are identical — a
+      //   no-op for them; it only changes the mismatched (text) case.
+      iv.contentMode = isMorph ? .scaleAspectFill : .scaleToFill
       flightView.addSubview(iv)
       sourceImageView = iv
     } else {
