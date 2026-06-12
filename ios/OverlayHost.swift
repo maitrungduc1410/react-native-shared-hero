@@ -96,19 +96,29 @@ private final class OverlayRootViewController: UIViewController {
   /// The topmost view controller in any window OTHER than our overlay
   /// window. Walks `presentedViewController` so a modal/sheet on top of the
   /// app's root counts as the topmost.
+  ///
+  /// Excludes our own window by VC TYPE, not just `self.view.window` identity:
+  /// at first launch the status-bar query can fire before the root view is
+  /// linked to its window (`self.view.window == nil`), so an identity-only
+  /// filter would keep our (highest-level) overlay window, pick it as the top,
+  /// and return `self` — UIKit then re-queries `self` forever (stack overflow).
   private var underlyingTopVC: UIViewController? {
     let scenes = UIApplication.shared.connectedScenes
     for scene in scenes {
       guard let ws = scene as? UIWindowScene else { continue }
       let underlyingWindows = ws.windows
-        .filter { $0 !== self.view.window && !$0.isHidden }
+        .filter {
+          $0 !== self.view.window
+            && !($0.rootViewController is OverlayRootViewController)
+            && !$0.isHidden
+        }
         .sorted(by: { $0.windowLevel < $1.windowLevel })
       guard let top = underlyingWindows.last else { continue }
       var vc = top.rootViewController
       while let presented = vc?.presentedViewController, !presented.isBeingDismissed {
         vc = presented
       }
-      if vc != nil { return vc }
+      if let vc = vc, vc !== self { return vc }
     }
     return nil
   }

@@ -7,6 +7,7 @@ import android.graphics.Color
 import android.graphics.Rect
 import com.facebook.react.bridge.ReactContext
 import com.facebook.react.uimanager.UIManagerHelper
+import com.facebook.react.uimanager.common.UIManagerType
 import com.facebook.react.uimanager.events.Event
 import com.facebook.react.views.view.ReactViewGroup
 
@@ -479,7 +480,13 @@ class SharedHeroView(context: Context?) : ReactViewGroup(context) {
   private fun emit(eventName: String) {
     val ctx = context as? ReactContext ?: return
     val surfaceId = UIManagerHelper.getSurfaceId(this)
-    val dispatcher = UIManagerHelper.getEventDispatcher(ctx) ?: return
+    // Use the two-arg `getEventDispatcher` (passing FABRIC, as this is a Fabric
+    // view): it exists on RN < 0.85 AND >= 0.85. The single-arg overload was
+    // only added in 0.85, so calling it breaks compilation on 0.84 ("No value
+    // passed for parameter 'uiManagerType'"). On >= 0.85 the two-arg form is
+    // deprecated (it just delegates to the single-arg one) — hence the suppress.
+    @Suppress("DEPRECATION")
+    val dispatcher = UIManagerHelper.getEventDispatcher(ctx, UIManagerType.FABRIC) ?: return
     dispatcher.dispatchEvent(
       SharedHeroEvent(surfaceId, id, eventName, config.heroId, config.heroNamespace),
     )

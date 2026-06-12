@@ -27,6 +27,16 @@ For the design rationale behind the architecture these lessons reference, see
 
 ---
 
+## 2026-06-12 — [Android] Published build broke on RN 0.84 — `UIManagerHelper.getEventDispatcher` single-arg overload only exists on 0.85+
+
+**Symptom**: A user on RN 0.84.0 (New Architecture) hit a compile error from the **published** package — `SharedHeroView.kt: No value passed for parameter 'uiManagerType'` — while our own freshly-generated test project and the example app built fine.
+
+**Root cause**: The code called the single-arg `UIManagerHelper.getEventDispatcher(ctx)`, which was **added in RN 0.85** (where the two-arg `getEventDispatcher(ctx, uiManagerType)` was simultaneously deprecated). On 0.84 only the two-arg form exists, so the call can't resolve. Our example/test apps were on RN 0.85/0.86, so they never exercised 0.84 — the breakage was invisible on our machines. (Verified against the `v0.84.0` tag's `UIManagerHelper.kt`.)
+
+**Fix**: Call the two-arg `UIManagerHelper.getEventDispatcher(ctx, UIManagerType.FABRIC)` (this is a Fabric view, matching the `getSurfaceId` assumption) — it exists on 0.84, 0.85, **and** 0.86 — wrapped in `@Suppress("DEPRECATION")` so newer builds stay warning-clean. `getSurfaceId(view)` was already cross-version. Kotlin reports all module errors at once and the user saw only this one, so it was the sole incompatibility.
+
+**Lesson**: The library is shipped as source, so it must **compile on every supported RN, not just the example's**. A recent RN in `example/` masks recently-added/removed APIs. Choose the widest-compatible overload, and before publishing, build the native sources against the **minimum** supported RN — a green example build proves nothing about older versions.
+
 ## 2026-06-08 — [iOS/UIKit] Interactive edge-swipe back flew to the wrong position because `windowFrame()` reads the model layer
 
 **Symptom**: On a slow left-edge swipe-back, the hero didn't track the finger — it flew immediately to a position that was off (veered left), worse the slower you swiped.
@@ -395,3 +405,4 @@ The core `<Modal>` example was a deliberate probe of cross-window behavior (it r
 - **Snapshots must never be blank.** Capture the source while it's attached and painted; keep a rolling stash plus a per-key last-known-good so a flight never flies an invisible bitmap.
 - **Match destinations to the settled frame, sources to the live frame.** The two diverge exactly during the transitions you care about.
 - **The host navigator churns, parallaxes, and stalls.** Defer-unregister to absorb same-tick reparenting, read transform-free frames for landings, and composite the overlay on the render thread.
+- **Compile against the RN floor, not the example's RN.** We ship source; a native API must exist on every supported RN. The example masks recently-added/removed APIs — pick the widest-compatible overload and verify against the minimum version before publishing.

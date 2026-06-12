@@ -289,6 +289,34 @@ public typealias SharedHeroEventEmitter = (_ id: String, _ namespace: String) ->
     return result
   }
 
+  /// This view's CURRENTLY-RENDERED window rect — the on-screen position
+  /// reflecting any in-flight CAAnimation, read from the PRESENTATION layer
+  /// rather than the model layer.
+  ///
+  /// Why it exists: when a UIKit transition COMMITS (an interactive swipe-back
+  /// released, a sheet let go) the model tree jumps straight to its final value
+  /// and only the presentation layers animate the remaining slide. `windowFrame()`
+  /// (model, `convert(_:to:)`-based) therefore reports the destination instantly
+  /// — gluing an overlay to it snaps. Reading the presentation layer instead lets
+  /// the overlay track the real page motion frame-by-frame with no fixed
+  /// duration/curve, on devices where the transition coordinator's signals are
+  /// unreliable (iOS 18 + react-native-screens).
+  ///
+  /// `CALayer.convert(_:to:)` between two presentation layers composes the
+  /// presentation (animated) geometry of every layer on the chain, so this is
+  /// transform-correct the same way `settledWindowFrame()` is. Falls back to the
+  /// model frame when no presentation layer exists yet (nothing animating).
+  func presentationWindowFrame() -> CGRect {
+    guard let window = contentView.window else { return .zero }
+    let bounds = contentView.bounds
+    if bounds.width <= 0 || bounds.height <= 0 { return .zero }
+    guard let from = contentView.layer.presentation() else {
+      return contentView.convert(bounds, to: window)
+    }
+    let to = window.layer.presentation() ?? window.layer
+    return from.convert(bounds, to: to)
+  }
+
   /// Diagnostic: one log line per ancestor layer (position / bounds / transform
   /// translation) to find which container causes an unexpected `windowFrame()`
   /// (e.g. a parallax-shifted result `settledWindowFrame()` should ignore).

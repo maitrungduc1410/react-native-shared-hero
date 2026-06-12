@@ -23,15 +23,25 @@ import UIKit
 /// once the present animation settles, then:
 ///
 ///   * `translation = live.minY - natural.minY` is how far the sheet dragged
-///     down (works whether UIKit moves it by transform or frame — we only read
-///     `windowFrame()`).
+///     down.
 ///   * On a downward drag, hide the real hero + list thumbnail and add an
 ///     overlay snapshot, lerped each frame from `natural + translation` (finger-
-///     tracking, so it stays over the real hero and covers the empty-card hole)
-///     toward the list thumbnail as the dismiss progresses.
-///   * Hero leaves the window (committed) ⇒ land on the thumbnail and hand off
-///     to the real list hero. Sheet returns to rest (cancelled) ⇒ restore. The
-///     commit/cancel decision is UIKit's; we just follow it.
+///     tracking) toward the list thumbnail as the dismiss progresses.
+///   * On release we keep driving the overlay off the sheet's PRESENTATION
+///     frame so it stays glued to the real slide, then crossfade to the real
+///     list hero (commit) or restore (cancel). The commit/cancel decision is
+///     read from where the sheet comes to rest, not from a coordinator flag.
+///
+/// ## Device-agnostic release detection (the iOS 18 fix)
+///
+/// We must NOT trust the transition coordinator's interaction-change signal
+/// (`isInteractive` / `notifyWhenInteractionChanges`): on iOS 18 + RNS it
+/// reports the interactive phase as OVER at the START of a slow drag, so the
+/// overlay snaps to the thumbnail immediately. The PHYSICAL finger lift is taken
+/// from the sheet's pan gesture recognizer's `.state` where one can be found,
+/// with a model-vs-presentation "jump" heuristic as the fallback. Once released
+/// we sync to the real slide via the presentation layer (no fixed duration), so
+/// neither iOS 18 nor iOS 26 depends on the coordinator.
 ///
 /// ## Known limitation
 ///
@@ -50,8 +60,19 @@ import UIKit
   /// Downward drag (pt) that arms the overlay. Small for near-instant tracking,
   /// non-zero so layout jitter can't trip it.
   private static let activateThreshold: CGFloat = 6
-  /// Translation at/below which an active drag counts as cancelled (back at rest).
-  private static let cancelThreshold: CGFloat = 2
+  /// Tolerance (pt) between the sheet's live (presentation) and settled (model)
+  /// frames that marks the post-release slide as finished.
+  private static let settleTolerance: CGFloat = 1.5
+  /// Fraction of the dismiss distance the sheet must have travelled, once the
+  /// post-release slide settles, to count as a COMMIT rather than a CANCEL.
+  private static let commitProgress: CGFloat = 0.5
+  /// Model-vs-presentation gap (pt) that flags a release when no sheet pan
+  /// recognizer was found: on release the model frame jumps to its final value
+  /// while the presentation layer lags.
+  private static let releaseJumpThreshold: CGFloat = 60
+  /// Ceiling on the post-release follow, so a slide that never reports settled
+  /// is still finalised.
+  private static let maxReleaseSeconds: CFTimeInterval = 1.0
 
   // MARK: - Session state.
 
@@ -63,8 +84,10 @@ import UIKit
   private var ready = false
   /// A downward drag is in progress and the overlay is live.
   private var active = false
-  /// The synced finish/cancel animation is running; while set the display link
-  /// must stand down (the model frame has jumped to its final value).
+  /// Finger released; following the sheet's PRESENTATION frame each tick until
+  /// the slide settles, then deciding commit vs cancel from its rest spot.
+  private var releasing = false
+  /// The terminal crossfade/teardown is running; ignore any stray tick.
   private var finishing = false
 
   private var overlay: UIView?
@@ -78,10 +101,23 @@ import UIKit
 
   private var lastY: CGFloat = .greatestFiniteMagnitude
   private var stableFrames = 0
+  private var releaseDeadline: CFTimeInterval = 0
+
+  // MARK: - Release detection.
+
+  /// The sheet's dismissal pan gesture recognizer, where one can be located.
+  /// Captured once the drag is active so we can read the PHYSICAL finger lift
+  /// from its `.state` instead of the unreliable transition coordinator. Weak:
+  /// it's owned by UIKit's sheet presentation.
+  private weak var popRecognizer: UIGestureRecognizer?
+  /// Set by `popRecognizer`'s target action the instant it ends/cancels/fails.
+  private var recognizerEnded = false
+  /// How the current release was detected, for the on-device logs.
+  private var releaseBy = ""
 
   /// The tracked hero has attached to a window at least once. Before that, a
-  /// `window == nil` reading just means the modal is still presenting (content
-  /// off-window during the present animation) — NOT a dismiss.
+  /// `window == nil` reading just means the modal is still presenting — NOT a
+  /// dismiss.
   private var everAttached = false
   /// Deadline for the first attach, so a flight queued for a destination that
   /// never attaches (e.g. aborted) doesn't leave the link spinning forever.
@@ -101,6 +137,7 @@ import UIKit
     self.twin = twin
     self.ready = false
     self.active = false
+    self.releasing = false
     self.finishing = false
     self.lastY = .greatestFiniteMagnitude
     self.stableFrames = 0
@@ -124,19 +161,26 @@ import UIKit
   }
 
   @objc private func tick() {
-    // Synced finish owns everything now; don't let the link fight it (the model
-    // frame has jumped to its final value).
     if finishing { return }
 
     guard let detail = detail else { disarm(); return }
 
-    // Off-window: before first attach the modal is still presenting (content
-    // off-window during the present animation) — wait, bounded by
-    // `attachDeadline`; after having attached, the modal finished dismissing.
+    // Post-release: follow the real slide via the presentation layer.
+    if releasing {
+      driveRelease(detail: detail)
+      return
+    }
+
+    // Off-window: before first attach the modal is still presenting — wait,
+    // bounded by `attachDeadline`; after having attached, the modal finished
+    // dismissing.
     guard detail.contentView.window != nil else {
       if everAttached {
         if active {
-          finalizeDismiss()
+          // Very fast swipe that committed before we caught the release edge —
+          // follow it straight into the handoff.
+          releaseBy = "offwindow"
+          beginRelease()
         } else {
           // Non-interactive dismiss (e.g. button) — let the registry's normal
           // back-flight handle it.
@@ -174,41 +218,87 @@ import UIKit
       return
     }
 
-    let tc = Self.sheetTransitionCoordinator(detail.contentView)
-
-    // RELEASE DETECTION. On finger-lift the dismissal stops being interactive:
-    // UIKit snaps the layer's MODEL value to its final state and animates only
-    // the presentation layer. `windowFrame()` is model-based, so it has jumped
-    // to the end — stop finger-tracking and run the overlay SYNCED to UIKit's
-    // completion (same duration + curve) so the hero lands with the sheet
-    // sliding off (commit) or returns to rest (cancel) instead of snapping.
-    if active, let tc = tc, !tc.isInteractive {
-      beginSyncedFinish(
-        cancelled: tc.isCancelled,
-        duration: tc.transitionDuration,
-        curve: tc.completionCurve
-      )
-      return
-    }
-
-    let translation = live.minY - naturalRect.minY
+    // The MODEL frame can jump straight to its final value the instant an
+    // interactive dismiss begins (iOS 18 + react-native-screens) — only the
+    // PRESENTATION layer follows the finger. Track translation off presentation,
+    // falling back to the model frame when nothing is animating yet.
+    let presLive = detail.presentationWindowFrame()
+    let tracked = presLive != .zero ? presLive : live
+    let translation = tracked.minY - naturalRect.minY
 
     if !active {
-      if translation > Self.activateThreshold {
-        activate()
-      }
-      return
+      // Once past the threshold, activate and fall through (NO return) to drive
+      // the overlay THIS tick — handing off exactly where the sheet already is.
+      // Returning would park it at rest for a frame, then jump to the finger
+      // (the start-of-drag "snap").
+      guard translation > Self.activateThreshold else { return }
+      activate()
     }
 
-    // FALLBACK cancel detection when there's no coordinator to sync to —
-    // just restore at rest. With one, the release branch above handles cancel.
-    if tc == nil, translation <= Self.cancelThreshold {
-      finalizeCancel()
+    // ACTIVE. Latch the sheet's pan recognizer so its `.state` (not the lying
+    // coordinator) tells us when the finger lifts; drive the overlay off the
+    // finger-following presentation frame until then.
+    captureRecognizer()
+    if releaseDetected(detail: detail, modelFrame: live) {
+      beginRelease()
+      driveRelease(detail: detail)
       return
     }
 
     let p = max(0, min(1, translation / dismissRef))
+    logDrag(translation: translation, progress: p)
     driveOverlay(translation: translation, progress: p)
+  }
+
+  // MARK: - Release detection helpers.
+
+  private func captureRecognizer() {
+    guard popRecognizer == nil, let detail = detail else { return }
+    guard let gr = Self.findActiveSheetRecognizer(detail.contentView) else { return }
+    popRecognizer = gr
+    recognizerEnded = false
+    gr.addTarget(self, action: #selector(popRecognizerChanged(_:)))
+    heroLog(HeroLog.interactive, "captured recognizer=\(String(describing: type(of: gr))) state=\(gr.state.rawValue)")
+  }
+
+  @objc private func popRecognizerChanged(_ gr: UIGestureRecognizer) {
+    switch gr.state {
+    case .ended, .cancelled, .failed:
+      recognizerEnded = true
+    default:
+      break
+    }
+  }
+
+  private func releaseRecognizerTarget() {
+    popRecognizer?.removeTarget(self, action: #selector(popRecognizerChanged(_:)))
+    popRecognizer = nil
+    recognizerEnded = false
+  }
+
+  /// True once the finger has physically lifted. Primary signal: the sheet pan
+  /// recognizer's `.state`. Fallback (none found): the model frame has jumped far
+  /// ahead of the presentation layer, which only happens on release.
+  private func releaseDetected(detail: SharedHeroViewImpl, modelFrame: CGRect) -> Bool {
+    if let gr = popRecognizer {
+      if recognizerEnded {
+        releaseBy = "gesture"
+        return true
+      }
+      switch gr.state {
+      case .ended, .cancelled, .failed:
+        releaseBy = "gesture-poll"
+        return true
+      default:
+        return false
+      }
+    }
+    let pres = detail.presentationWindowFrame()
+    if pres != .zero, abs(modelFrame.minY - pres.minY) > Self.releaseJumpThreshold {
+      releaseBy = "divergence"
+      return true
+    }
+    return false
   }
 
   // MARK: - Interactive overlay lifecycle.
@@ -261,7 +351,7 @@ import UIKit
     HeroRegistry.shared.markInteractivelyHandled(detail)
     detail.emitTransitionStart()
     active = true
-    heroLog(HeroLog.interactive, "activate detail=\(ObjectIdentifier(detail)) natural=\(naturalRect) dest=\(destRect) dismissRef=\(dismissRef)")
+    heroLog(HeroLog.interactive, "activate detail=\(ObjectIdentifier(detail)) natural=\(naturalRect) dest=\(destRect) dismissRef=\(rd(dismissRef))")
   }
 
   private func driveOverlay(translation: CGFloat, progress p: CGFloat) {
@@ -275,8 +365,55 @@ import UIKit
     ov.layer.cornerRadius = sourceCorner + (destCorner - sourceCorner) * p
   }
 
+  // MARK: - Post-release follow.
+
+  private func beginRelease() {
+    guard !releasing, !finishing else { return }
+    releasing = true
+    active = false
+    releaseDeadline = CACurrentMediaTime() + Self.maxReleaseSeconds
+    heroLog(HeroLog.interactive, "release by=\(releaseBy) — following presentation")
+  }
+
+  /// Follow the real post-release slide via the presentation layer, then decide
+  /// commit vs cancel from where the sheet comes to rest.
+  private func driveRelease(detail: SharedHeroViewImpl) {
+    guard let ov = overlay else { disarm(); return }
+
+    // Sheet gone → committed; land on the thumbnail and hand off.
+    if detail.contentView.window == nil {
+      heroLog(HeroLog.interactive, "release: detail off-window → commit")
+      finalizeDismiss()
+      return
+    }
+
+    let pres = detail.presentationWindowFrame()
+    let model = detail.windowFrame()
+    let frame = pres != .zero ? pres : model
+    let translation = frame.minY - naturalRect.minY
+    let p = max(0, min(1, translation / dismissRef))
+    let followed = naturalRect.offsetBy(dx: 0, dy: translation)
+    ov.frame = Self.lerpRect(followed, destRect, p)
+    ov.layer.cornerRadius = sourceCorner + (destCorner - sourceCorner) * p
+
+    let settled = pres == .zero
+      || (abs(pres.minY - model.minY) < Self.settleTolerance
+          && abs(pres.minX - model.minX) < Self.settleTolerance)
+    let timedOut = CACurrentMediaTime() > releaseDeadline
+    guard settled || timedOut else { return }
+
+    if translation > dismissRef * Self.commitProgress {
+      heroLog(HeroLog.interactive, "release settled → commit transl=\(rd(translation)) settled=\(settled) timedOut=\(timedOut)")
+      finalizeDismiss()
+    } else {
+      heroLog(HeroLog.interactive, "release settled → cancel transl=\(rd(translation)) settled=\(settled) timedOut=\(timedOut)")
+      finalizeCancel()
+    }
+  }
+
   private func finalizeDismiss() {
     guard let ov = overlay else { disarm(); return }
+    finishing = true
     let twin = self.twin
     let detail = self.detail
     heroLog(HeroLog.interactive, "finalizeDismiss dest=\(destRect)")
@@ -309,9 +446,11 @@ import UIKit
     // down and its deferred `commitUnregister` must keep early-returning so it
     // doesn't fire a redundant back-flight. `register` clears the stale mark on
     // remount.
+    releaseRecognizerTarget()
     self.detail = nil
     self.twin = nil
     self.active = false
+    self.releasing = false
     self.ready = false
     stopLink()
   }
@@ -327,99 +466,12 @@ import UIKit
     overlay?.removeFromSuperview()
     overlay = nil
     releaseHostIfNeeded()
+    releaseRecognizerTarget()
     HeroRegistry.shared.unmarkInteractivelyHandled(detail)
     detail.emitTransitionEnd()
     active = false
+    releasing = false
     // Stay armed + ready so a subsequent drag re-triggers.
-  }
-
-  /// Animate the overlay in lock-step with UIKit's sheet finish/cancel
-  /// completion after release. `duration`/`curve` come from the sheet's
-  /// transition coordinator so we match its slide-off (commit) or snap-back
-  /// (cancel) instead of snapping.
-  private func beginSyncedFinish(
-    cancelled: Bool,
-    duration: TimeInterval,
-    curve: UIView.AnimationCurve
-  ) {
-    guard let ov = overlay, let detail = detail else { disarm(); return }
-    finishing = true
-    active = false
-    let dur = duration > 0.05 ? duration : 0.3
-    let opt = Self.animationOption(for: curve)
-
-    if cancelled {
-      // Fly the overlay back onto the hero's natural resting position in sync
-      // with the sheet returning up, then reveal the real hero underneath with
-      // zero jump.
-      let twin = self.twin
-      heroLog(HeroLog.interactive, "syncedCancel dur=\(dur)")
-      UIView.animate(
-        withDuration: dur,
-        delay: 0,
-        options: [opt, .allowUserInteraction],
-        animations: {
-          ov.frame = self.naturalRect
-          ov.layer.cornerRadius = self.sourceCorner
-        },
-        completion: { _ in
-          detail.setHiddenForFlight(false)
-          twin?.setHiddenForFlight(false)
-          ov.removeFromSuperview()
-          if self.overlay === ov { self.overlay = nil }
-          self.releaseHostIfNeeded()
-          HeroRegistry.shared.unmarkInteractivelyHandled(detail)
-          detail.emitTransitionEnd()
-          self.finishing = false
-          // Stay armed + ready so a subsequent drag re-triggers.
-        }
-      )
-      return
-    }
-
-    // Commit: the sheet is sliding the rest of the way down. The model frame
-    // has jumped to its final state, so the twin's settled frame now reports
-    // where the thumbnail rests once the presenter scales back to identity. Fly
-    // the overlay there over the SAME duration/curve as the sheet completion,
-    // then crossfade to the real (now-settled) thumbnail.
-    let twin = self.twin
-    let finalRect = nonZero(twin?.settledWindowFrame())
-      ?? nonZero(twin?.windowFrame())
-      ?? destRect
-    heroLog(HeroLog.interactive, "syncedCommit dur=\(dur) final=\(finalRect)")
-    UIView.animate(
-      withDuration: dur,
-      delay: 0,
-      options: [opt, .allowUserInteraction],
-      animations: {
-        ov.frame = finalRect
-        ov.layer.cornerRadius = self.destCorner
-      },
-      completion: { _ in
-        twin?.setHiddenForFlight(false)
-        UIView.animate(
-          withDuration: 0.1,
-          animations: { ov.alpha = 0 },
-          completion: { _ in
-            ov.removeFromSuperview()
-            if self.overlay === ov { self.overlay = nil }
-            self.releaseHostIfNeeded()
-          }
-        )
-        detail.emitTransitionEnd()
-      }
-    )
-    // Tear down the link + refs now; the animation closures own the overlay.
-    //
-    // Deliberately DO NOT `unmarkInteractivelyHandled`: the hero is being torn
-    // down and its deferred `commitUnregister` must keep early-returning so it
-    // doesn't fire a redundant back-flight. `register` clears the stale mark on
-    // remount.
-    self.detail = nil
-    self.twin = nil
-    self.ready = false
-    self.finishing = false
-    stopLink()
   }
 
   private func releaseHostIfNeeded() {
@@ -434,7 +486,7 @@ import UIKit
   /// eligible (deallocated, not a sheet, non-interactive dismiss).
   private func disarm() {
     stopLink()
-    if active {
+    if active || releasing {
       detail?.setHiddenForFlight(false)
       twin?.setHiddenForFlight(false)
       detail.map { HeroRegistry.shared.unmarkInteractivelyHandled($0) }
@@ -442,43 +494,41 @@ import UIKit
     overlay?.removeFromSuperview()
     overlay = nil
     releaseHostIfNeeded()
+    releaseRecognizerTarget()
     detail = nil
     twin = nil
     ready = false
     active = false
+    releasing = false
     finishing = false
   }
 
   // MARK: - Helpers.
 
-  /// The presented sheet's active transition coordinator — used to detect
-  /// release and match the finish/cancel duration + curve. Walks the responder
-  /// chain to the presented VC (the one with a `presentingViewController`); UIKit
-  /// sets its coordinator for the duration of an interactive dismissal.
-  private static func sheetTransitionCoordinator(_ view: UIView) -> UIViewControllerTransitionCoordinator? {
+  /// Find the pan gesture recognizer driving the sheet's swipe-to-dismiss.
+  /// Scans the presented VC's view and its superview chain up to the window for
+  /// a recognizer currently tracking (`.began`/`.changed`). Sheets keep their
+  /// dismissal pan on an internal container, so this is best-effort — the
+  /// model-vs-presentation fallback in `releaseDetected` covers a miss.
+  private static func findActiveSheetRecognizer(_ view: UIView) -> UIGestureRecognizer? {
+    // Locate the presented sheet's root view.
+    var sheetView: UIView?
     var responder: UIResponder? = view
     while let r = responder {
       if let vc = r as? UIViewController, vc.presentingViewController != nil {
-        return vc.transitionCoordinator
+        sheetView = vc.view
+        break
       }
       responder = r.next
     }
-    return nil
-  }
 
-  private static func animationOption(for curve: UIView.AnimationCurve) -> UIView.AnimationOptions {
-    switch curve {
-    case .easeIn: return .curveEaseIn
-    case .easeOut: return .curveEaseOut
-    case .easeInOut: return .curveEaseInOut
-    case .linear: return .curveLinear
-    @unknown default: return .curveEaseOut
+    var candidates: [UIGestureRecognizer] = []
+    var v: UIView? = sheetView ?? view
+    while let cur = v {
+      if let grs = cur.gestureRecognizers { candidates.append(contentsOf: grs) }
+      v = cur.superview
     }
-  }
-
-  private func nonZero(_ rect: CGRect?) -> CGRect? {
-    guard let rect = rect, rect != .zero else { return nil }
-    return rect
+    return candidates.first { $0.state == .began || $0.state == .changed }
   }
 
   /// True if `view` is hosted in a presented sheet (`pageSheet` / `formSheet`),
@@ -506,5 +556,17 @@ import UIKit
       width: a.size.width + (b.size.width - a.size.width) * t,
       height: a.size.height + (b.size.height - a.size.height) * t
     )
+  }
+
+  private func rd(_ v: CGFloat) -> CGFloat { (v * 10).rounded() / 10 }
+
+  // MARK: - Throttled drag logging.
+
+  private var lastLoggedTranslation: CGFloat = .greatestFiniteMagnitude
+  private func logDrag(translation: CGFloat, progress p: CGFloat) {
+    guard abs(translation - lastLoggedTranslation) >= 24 else { return }
+    lastLoggedTranslation = translation
+    let grState = popRecognizer?.state.rawValue ?? -1
+    heroLog(HeroLog.interactive, "drag transl=\(rd(translation)) p=\(rd(p)) grState=\(grState)")
   }
 }

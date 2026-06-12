@@ -26,6 +26,14 @@ Guidance for AI coding agents and contributors working in this repo. Keep change
 - Native prop names are the codegen names (`heroId`, `heroNamespace`, `mode`, `duration`, `springDamping/Stiffness/Mass`, `fadeMode`, `easing`, `motionPath`, `enabled`, `returnFlightEnabled`) plus `onTransitionStart`/`onTransitionEnd` direct events carrying `{ id, ns }`. If you add a prop, update **all** of: `types.ts`, `SharedHeroView.tsx`, `SharedHeroViewNativeComponent.ts`, the iOS `updateProps` in `SharedHeroView.mm` + `SharedHeroConfig`, and the Android `@ReactProp` setter + `SharedHeroConfig`.
 - Android style props (`borderRadius`, `overflow`, `borderWidth/Color/Style`) are intercepted by `HeroStylePropDelegate` and routed through `BackgroundStyleApplicator` — codegen-fronted components otherwise drop them. Don't remove that delegate.
 
+## RN version compatibility (native APIs)
+
+The library ships as **source** — the `.kt`/`.swift`/`.mm` files are compiled inside the consumer's app — so every React Native API it calls must exist in **every** RN version we claim to support, not just the one in `example/`. The example tracks a recent RN, which silently masks APIs that were only added in a recent minor.
+
+- **Pick the widest-compatible overload.** RN adds/deprecates overloads across minors. Example (the 2026-06-12 bug): `UIManagerHelper.getEventDispatcher(ctx)` (single-arg) only exists on RN **≥ 0.85**; the two-arg `getEventDispatcher(ctx, UIManagerType.FABRIC)` exists on 0.84 **and** newer (deprecated there → wrap in `@Suppress("DEPRECATION")`). Use the form that compiles everywhere.
+- **Validate against the floor, not just `example/`.** Before publishing, compile the native sources against the **minimum** supported RN (a consumer project pinned to it). A green `example` build only proves the example's RN version.
+- Current floor: RN **0.84+** (Android), New Architecture only. If you adopt a newer-only native API, gate it or bump the documented floor — and note it here.
+
 ## Build / test / lint
 
 Root `package.json` scripts:
