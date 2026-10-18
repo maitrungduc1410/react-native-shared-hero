@@ -308,9 +308,19 @@ import UIKit
     // Prefer the most recently-registered twin still ATTACHED to a window.
     // Without this, rapid push/pop cycles can leave a stale outgoing view in the
     // bucket whose `captureSnapshot()` returns nil, silently aborting the flight.
+    //
+    // Skip a twin whose unregister is still deferred with `returnFlightEnabled = false`: it opted
+    // into a quiet teardown, so it must not source a flight either. A pager handing one key from
+    // the page leaving the stage to the page arriving disables the old hero and enables the new
+    // one; when both reach native in the same main-thread turn, the new hero registered before the
+    // old one's deferred commit and flew the old page's photo into the new page mid-scroll (Android
+    // unregisters synchronously, so it never saw the race).
+    let quietlyLeaving = Set(pendingUnregisters.values
+      .filter { !$0.returnFlightEnabled }
+      .map { ObjectIdentifier($0.view) })
     let twin = bucket.reversed().first(where: {
       guard let v = $0.value else { return false }
-      return v.contentView.window != nil
+      return v.contentView.window != nil && !quietlyLeaving.contains(ObjectIdentifier(v))
     })?.value
     bucket.append(WeakBox(view))
     live[key] = bucket
