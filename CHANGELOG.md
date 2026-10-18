@@ -1,5 +1,11 @@
 # react-native-shared-hero
 
+## 1.0.5
+
+### Patch Changes
+
+- 97f1392: Skip pairing a newly registered iOS hero with a twin whose deferred unregister opted out of return flights (`returnFlightEnabled={false}`), preventing bogus mid-scroll flights during horizontal pager handovers (#13).
+
 ## 1.0.4
 
 ### Patch Changes
