@@ -113,7 +113,14 @@ private final class OverlayRootViewController: UIViewController {
             && !$0.isHidden
         }
         .sorted(by: { $0.windowLevel < $1.windowLevel })
-      guard let top = underlyingWindows.last else { continue }
+      // The app's KEY window, not the highest-level one. The highest is a system window —
+      // `UITextEffectsWindow`, the keyboard host — whose orientation follows the windows above
+      // it, this overlay included. Deferring to it, the two windows held each other: after the
+      // scene moved to another display (iPhone Duo fold/unfold) both kept the old orientation
+      // while the app's window rotated, and the status bar and safe area followed the overlay.
+      // The overlay is never key (it takes no touches), so the key window is the app's own.
+      guard let top = underlyingWindows.first(where: { $0.isKeyWindow })
+        ?? underlyingWindows.last else { continue }
       var vc = top.rootViewController
       while let presented = vc?.presentedViewController, !presented.isBeingDismissed {
         vc = presented
